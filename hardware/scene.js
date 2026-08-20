@@ -26,7 +26,7 @@
     0.1,
     500
   );
-  camera.position.set(11.5, 17.5, 15.5);
+  camera.position.set(25, 19, 25);
 
   // ---------------------------------------------------------------
   // Controls
@@ -722,6 +722,99 @@
   `;
 
   container.appendChild(gridContext);
+  // ---------------------------------------------------------------
+  // Achilles security architecture status
+  // ---------------------------------------------------------------
+  var securityPanel = document.createElement("div");
+
+  securityPanel.style.position = "fixed";
+  securityPanel.style.right = "20px";
+  securityPanel.style.bottom = "20px";
+  securityPanel.style.width = "390px";
+  securityPanel.style.background = "rgba(247,250,252,0.97)";
+  securityPanel.style.border = "1px solid #cfd3d8";
+  securityPanel.style.borderRadius = "6px";
+  securityPanel.style.boxShadow = "0 8px 24px rgba(0,0,0,0.18)";
+  securityPanel.style.padding = "14px";
+  securityPanel.style.zIndex = "9998";
+  securityPanel.style.fontFamily = "Arial, sans-serif";
+  securityPanel.style.color = "#20242a";
+
+  securityPanel.innerHTML = `
+    <div style="
+      font-size:15px;
+      font-weight:700;
+      margin-bottom:10px;
+      border-bottom:1px solid #d9dde1;
+      padding-bottom:8px;
+    ">
+      ACHILLES SECURITY ARCHITECTURE
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+
+      <div style="
+        border-left:4px solid #1683c7;
+        padding:8px;
+        background:#eef7fc;
+      ">
+        <strong>01 DETECT</strong>
+        <div style="font-size:10px;margin-top:4px;color:#59656d;">
+          DHT22 · INA219 · MAX485
+        </div>
+      </div>
+
+      <div style="
+        border-left:4px solid #1683c7;
+        padding:8px;
+        background:#eef7fc;
+      ">
+        <strong>02 DECIDE</strong>
+        <div style="font-size:10px;margin-top:4px;color:#59656d;">
+          STM32 · HASH · ATTESTATION
+        </div>
+      </div>
+
+      <div style="
+        border-left:4px solid #596a75;
+        padding:8px;
+        background:#f2f4f5;
+      ">
+        <strong>03 ENFORCE</strong>
+        <div style="font-size:10px;margin-top:4px;color:#59656d;">
+          RS-485 COMMUNICATION PATH
+        </div>
+      </div>
+
+      <div style="
+        border-left:4px solid #596a75;
+        padding:8px;
+        background:#f2f4f5;
+      ">
+        <strong>04 FAIL-SAFE</strong>
+        <div style="font-size:10px;margin-top:4px;color:#59656d;">
+          INDEPENDENT HARDWARE SAFETY
+        </div>
+      </div>
+
+    </div>
+
+    <div style="
+      margin-top:10px;
+      padding-top:8px;
+      border-top:1px solid #d9dde1;
+      display:flex;
+      justify-content:space-between;
+      font-size:11px;
+    ">
+      <span>NODE TRUST</span>
+      <strong style="color:#1683c7;">
+        ${telemetry.trustScore}%
+      </strong>
+    </div>
+  `;
+
+  document.body.appendChild(securityPanel);
   function showTelemetry(title, rows) {
 
     telemetryPanel.style.display = "block";
@@ -1624,6 +1717,7 @@
           showTelemetry(
             "DHT22 — ENVIRONMENTAL TELEMETRY",
             [
+              ["Interface", "Single-wire digital"],
               ["Temperature", telemetry.dht22.temperature + " °C"],
               ["Humidity", telemetry.dht22.humidity + " %"],
               ["Status", telemetry.dht22.status]
@@ -1635,6 +1729,8 @@
           showTelemetry(
             "INA219 — POWER TELEMETRY",
             [
+              ["Interface", "I2C"],
+              ["Measurement", "Conditioned LV path"],
               ["Voltage", telemetry.ina219.voltage + " V"],
               ["Current", telemetry.ina219.current + " A"],
               ["Power", telemetry.ina219.power + " W"],
@@ -1647,7 +1743,8 @@
           showTelemetry(
             "W25Q128 — FIRMWARE INTEGRITY",
             [
-              ["Firmware", telemetry.flash.firmware],
+              ["Interface", "SPI"],
+              ["Storage", "Firmware image"],
               ["Hash", telemetry.flash.hash],
               ["Attestation", telemetry.flash.attestation],
               ["Status", telemetry.flash.status]
@@ -1659,6 +1756,8 @@
           showTelemetry(
             "MAX485 — COMMUNICATION TELEMETRY",
             [
+              ["Interface", "UART → RS-485"],
+              ["Protocol", "Industrial bus"],
               ["RX", telemetry.max485.rx],
               ["TX", telemetry.max485.tx],
               ["Packet loss", telemetry.max485.packetLoss + " %"],
@@ -1671,6 +1770,8 @@
           showTelemetry(
             "STM32 — TRUST DECISION",
             [
+              ["Role", "Local processing"],
+              ["Firmware", "Verified"],
               ["Trust score", telemetry.trustScore + " %"],
               ["Decision", telemetry.decision],
               ["Mode", telemetry.mode]
@@ -1793,5 +1894,114 @@
     );
   }
 
+  // ---------------------------------------------------------------
+  // Physical component identification labels
+  // ---------------------------------------------------------------
+
+  function createComponentLabel(text) {
+
+    var canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 128;
+
+    var ctx = canvas.getContext("2d");
+
+    ctx.fillStyle = "rgba(255,255,255,0.94)";
+    ctx.fillRect(0, 0, 512, 128);
+
+    ctx.strokeStyle = "#53636d";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(2, 2, 508, 124);
+
+    ctx.font = "700 34px Arial";
+    ctx.fillStyle = "#26343d";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.fillText(text, 256, 64);
+
+    var texture = new THREE.CanvasTexture(canvas);
+
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    var material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false
+    });
+
+    var sprite = new THREE.Sprite(material);
+
+    sprite.scale.set(2.8, 0.7, 1);
+
+    return sprite;
+  }
+
+
+  function addComponentLabel(object, text, offsetY) {
+
+    var box = new THREE.Box3().setFromObject(object);
+
+    var center = new THREE.Vector3();
+    box.getCenter(center);
+
+    var size = new THREE.Vector3();
+    box.getSize(size);
+
+    var label =
+      createComponentLabel(text);
+
+    label.position.set(
+      center.x,
+      box.max.y + offsetY,
+      center.z
+    );
+
+    scene.add(label);
+
+    return label;
+  }
+
+
+  // ---------------------------------------------------------------
+  // Hardware identification
+  // ---------------------------------------------------------------
+
+  addComponentLabel(
+    stm32,
+    "STM32  |  SECURITY AGENT",
+    0.8
+  );
+
+  addComponentLabel(
+    esp32,
+    "ESP32  |  Wi-Fi GATEWAY",
+    0.8
+  );
+
+  addComponentLabel(
+    dht22,
+    "DHT22  |  DIGITAL TELEMETRY",
+    0.7
+  );
+
+  addComponentLabel(
+    ina219,
+    "INA219  |  I2C POWER MONITOR",
+    0.7
+  );
+
+  addComponentLabel(
+    flash,
+    "W25Q128  |  SPI FLASH",
+    0.7
+  );
+
+  addComponentLabel(
+    max485,
+    "MAX485  |  UART / RS-485",
+    0.7
+  );
 animate();
 })();
