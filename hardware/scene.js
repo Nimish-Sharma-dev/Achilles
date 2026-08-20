@@ -25,13 +25,13 @@
     0.1,
     500
   );
-  camera.position.set(14, 16, 20);
+  camera.position.set(12, 13, 17);
 
   // ---------------------------------------------------------------
   // Controls
   // ---------------------------------------------------------------
   var controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0.5, 0);
+  controls.target.set(0, 0.6, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 8;
@@ -104,66 +104,347 @@
     return m;
   }
 
-  // ---------------------------------------------------------------
-  // Breadboard
-  // ---------------------------------------------------------------
-  var HOLE_SPACING = 0.42;
-  var COLS = 42;
-  var BOARD_W = COLS * HOLE_SPACING + 1.6;
-  var BOARD_D = 8.6;
+    // ---------------------------------------------------------------
+    // Breadboard
+    // ---------------------------------------------------------------
 
-  var breadboardGroup = new THREE.Group();
+    var HOLE_SPACING = 0.42;
+    var COLS = 42;
 
-  var base = box(BOARD_W, 0.5, BOARD_D, mat.board);
-  base.position.y = 0.25;
-  breadboardGroup.add(base);
+    var BOARD_W = COLS * HOLE_SPACING + 1.6;
+    var BOARD_D = 8.6;
+    var BOARD_H = 0.48;
 
-  // rail stripes (visual reference lines under the top/bottom rail hole rows)
-  function railStripe(zPos, material) {
-    var stripe = box(BOARD_W - 1.4, 0.02, 0.14, material);
-    stripe.position.set(0, 0.51, zPos);
-    stripe.castShadow = false;
-    breadboardGroup.add(stripe);
-  }
-  railStripe(BOARD_D / 2 - 0.32, mat.railRed);
-  railStripe(BOARD_D / 2 - 0.62, mat.railBlue);
-  railStripe(-BOARD_D / 2 + 0.32, mat.railBlue);
-  railStripe(-BOARD_D / 2 + 0.62, mat.railRed);
+    var breadboardGroup = new THREE.Group();
 
-  // hole grid — one InstancedMesh for every hole on the board
-  var holeRowsZ = [];
-  // top power rail (2 rows)
-  holeRowsZ.push(BOARD_D / 2 - 0.32, BOARD_D / 2 - 0.62);
-  // top terminal block (5 rows)
-  for (var r = 0; r < 5; r++) holeRowsZ.push(1.55 - r * HOLE_SPACING);
-  // bottom terminal block (5 rows)
-  for (var r2 = 0; r2 < 5; r2++) holeRowsZ.push(-0.65 - r2 * HOLE_SPACING);
-  // bottom power rail (2 rows)
-  holeRowsZ.push(-BOARD_D / 2 + 0.62, -BOARD_D / 2 + 0.32);
 
-  var holeCount = holeRowsZ.length * COLS;
-  var holeMesh = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.045, 0.045, 0.12, 8),
-    mat.hole,
-    holeCount
-  );
-  var dummy = new THREE.Object3D();
-  var startX = -(COLS - 1) * HOLE_SPACING / 2;
-  var idx = 0;
-  for (var ri = 0; ri < holeRowsZ.length; ri++) {
-    for (var ci = 0; ci < COLS; ci++) {
-      dummy.position.set(startX + ci * HOLE_SPACING, 0.5, holeRowsZ[ri]);
-      dummy.updateMatrix();
-      holeMesh.setMatrixAt(idx, dummy.matrix);
-      idx++;
+    // ---------------------------------------------------------------
+    // Main body
+    // ---------------------------------------------------------------
+
+    var base = box(
+    BOARD_W,
+    BOARD_H,
+    BOARD_D,
+    mat.board
+    );
+
+    base.position.y = BOARD_H / 2;
+
+    breadboardGroup.add(base);
+
+
+    // ---------------------------------------------------------------
+    // Central isolation channel
+    // ---------------------------------------------------------------
+
+    var channelMaterial =
+    new THREE.MeshStandardMaterial({
+        color: 0xd6d4ca,
+        roughness: 0.9
+    });
+
+    var centerChannel = box(
+    BOARD_W - 0.7,
+    0.035,
+    0.52,
+    channelMaterial
+    );
+
+    centerChannel.position.set(
+    0,
+    BOARD_H + 0.018,
+    0
+    );
+
+    centerChannel.castShadow = false;
+
+    breadboardGroup.add(centerChannel);
+
+
+    // ---------------------------------------------------------------
+    // Terminal block separators
+    // ---------------------------------------------------------------
+
+    var separatorMaterial =
+    new THREE.MeshStandardMaterial({
+        color: 0xc8c6bc,
+        roughness: 0.9
+    });
+
+
+    // upper block separator
+    var upperSeparator = box(
+    BOARD_W - 0.7,
+    0.035,
+    0.07,
+    separatorMaterial
+    );
+
+    upperSeparator.position.set(
+    0,
+    BOARD_H + 0.018,
+    1.72
+    );
+
+    breadboardGroup.add(upperSeparator);
+
+
+    // lower block separator
+    var lowerSeparator = box(
+    BOARD_W - 0.7,
+    0.035,
+    0.07,
+    separatorMaterial
+    );
+
+    lowerSeparator.position.set(
+    0,
+    BOARD_H + 0.018,
+    -1.72
+    );
+
+    breadboardGroup.add(lowerSeparator);
+
+
+    // ---------------------------------------------------------------
+    // Power rails
+    // ---------------------------------------------------------------
+
+    function railStripe(zPos, material) {
+
+    var rail = box(
+        BOARD_W - 0.65,
+        0.055,
+        0.11,
+        material
+    );
+
+    rail.position.set(
+        0,
+        BOARD_H + 0.055,
+        zPos
+    );
+
+    rail.castShadow = false;
+
+    breadboardGroup.add(rail);
     }
-  }
-  holeMesh.instanceMatrix.needsUpdate = true;
-  holeMesh.receiveShadow = true;
-  breadboardGroup.add(holeMesh);
 
-  scene.add(breadboardGroup);
 
+    railStripe(
+    BOARD_D / 2 - 0.34,
+    mat.railRed
+    );
+
+    railStripe(
+    BOARD_D / 2 - 0.66,
+    mat.railBlue
+    );
+
+    railStripe(
+    -BOARD_D / 2 + 0.66,
+    mat.railBlue
+    );
+
+    railStripe(
+    -BOARD_D / 2 + 0.34,
+    mat.railRed
+    );
+
+
+    // ---------------------------------------------------------------
+    // Rail separators
+    // ---------------------------------------------------------------
+
+    var railSeparatorMaterial =
+    new THREE.MeshStandardMaterial({
+        color: 0xc5c3b9,
+        roughness: 0.9
+    });
+
+
+    function railSeparator(zPos) {
+
+    var separator = box(
+        BOARD_W - 0.65,
+        0.025,
+        0.05,
+        railSeparatorMaterial
+    );
+
+    separator.position.set(
+        0,
+        BOARD_H + 0.055,
+        zPos
+    );
+
+    breadboardGroup.add(separator);
+    }
+
+
+    railSeparator(BOARD_D / 2 - 0.49);
+    railSeparator(-BOARD_D / 2 + 0.49);
+
+
+    // ---------------------------------------------------------------
+    // Hole layout
+    // ---------------------------------------------------------------
+
+    var holeRowsZ = [];
+
+
+    // Upper terminal block — five rows
+    for (var upperRow = 0; upperRow < 5; upperRow++) {
+
+    holeRowsZ.push(
+        1.48 - upperRow * HOLE_SPACING
+    );
+    }
+
+
+    // Lower terminal block — five rows
+    for (var lowerRow = 0; lowerRow < 5; lowerRow++) {
+
+    holeRowsZ.push(
+        -0.68 - lowerRow * HOLE_SPACING
+    );
+    }
+
+
+    // Power rails
+    holeRowsZ.push(
+    BOARD_D / 2 - 0.34,
+    BOARD_D / 2 - 0.66,
+    -BOARD_D / 2 + 0.66,
+    -BOARD_D / 2 + 0.34
+    );
+
+
+    var holeCount =
+    holeRowsZ.length * COLS;
+
+
+    var holeGeometry =
+    new THREE.CylinderGeometry(
+        0.055,
+        0.055,
+        0.035,
+        10
+    );
+
+
+    var holeMesh =
+    new THREE.InstancedMesh(
+        holeGeometry,
+        mat.hole,
+        holeCount
+    );
+
+
+    var dummy =
+    new THREE.Object3D();
+
+
+    var startX =
+    -(COLS - 1) *
+    HOLE_SPACING / 2;
+
+
+    var idx = 0;
+
+
+    for (
+    var rowIndex = 0;
+    rowIndex < holeRowsZ.length;
+    rowIndex++
+    ) {
+
+    for (
+        var columnIndex = 0;
+        columnIndex < COLS;
+        columnIndex++
+    ) {
+
+        dummy.position.set(
+        startX +
+            columnIndex * HOLE_SPACING,
+
+        BOARD_H + 0.065,
+
+        holeRowsZ[rowIndex]
+        );
+
+        dummy.rotation.x =
+        Math.PI / 2;
+
+        dummy.updateMatrix();
+
+        holeMesh.setMatrixAt(
+        idx,
+        dummy.matrix
+        );
+
+        idx++;
+    }
+    }
+
+
+    holeMesh.instanceMatrix.needsUpdate = true;
+
+    holeMesh.receiveShadow = true;
+
+    breadboardGroup.add(holeMesh);
+
+
+    // ---------------------------------------------------------------
+    // Breadboard end caps
+    // ---------------------------------------------------------------
+
+    var endCapMaterial =
+    new THREE.MeshStandardMaterial({
+        color: 0xe1dfd5,
+        roughness: 0.85
+    });
+
+
+    var leftCap = box(
+    0.35,
+    0.62,
+    BOARD_D + 0.15,
+    endCapMaterial
+    );
+
+    leftCap.position.set(
+    -BOARD_W / 2 - 0.03,
+    0.30,
+    0
+    );
+
+    breadboardGroup.add(leftCap);
+
+
+    var rightCap = box(
+    0.35,
+    0.62,
+    BOARD_D + 0.15,
+    endCapMaterial
+    );
+
+    rightCap.position.set(
+    BOARD_W / 2 + 0.03,
+    0.30,
+    0
+    );
+
+    breadboardGroup.add(rightCap);
+
+
+    // ---------------------------------------------------------------
+    // Add breadboard to scene
+    // ---------------------------------------------------------------
+
+    scene.add(breadboardGroup);
   // ---------------------------------------------------------------
   // Helper: pin headers along a component's long edges
   // ---------------------------------------------------------------
@@ -344,79 +625,111 @@
     return g;
   }
 
-  // ---------------------------------------------------------------
-  // Place components on the board (layout loosely mirrors reference)
-  // ---------------------------------------------------------------
-  var stm32 = buildSTM32();
-  stm32.position.set(-6.4, 0, 0.9);
-  scene.add(stm32);
+    // ---------------------------------------------------------------
+    // Place components on the board
+    // ---------------------------------------------------------------
 
-  var esp32 = buildESP32();
-  esp32.position.set(-1.6, 0, 1.2);
-  scene.add(esp32);
+    var stm32 = buildSTM32();
 
-  var dht22 = buildDHT22();
-  dht22.position.set(2.9, 0, 1.6);
-  scene.add(dht22);
-
-  var ina219 = buildINA219();
-  ina219.position.set(4.3, 0, -0.6);
-  scene.add(ina219);
-
-  var flash = buildFlash();
-  flash.position.set(-5.0, 0, -1.9);
-  scene.add(flash);
-
-  var max485 = buildMAX485();
-  max485.position.set(2.8, 0, -1.9);
-  scene.add(max485);
-
-  var ledRed = buildLED(mat.ledRed);
-  ledRed.position.set(0.55, 0, -2.6);
-  scene.add(ledRed);
-
-  var ledYellow = buildLED(mat.ledYellow);
-  ledYellow.position.set(0.0, 0, -2.6);
-  scene.add(ledYellow);
-
-  var ledGreen = buildLED(mat.ledGreen);
-  ledGreen.position.set(-0.55, 0, -2.6);
-  scene.add(ledGreen);
-
-  // ---------------------------------------------------------------
-  // Jumper wires — tubes following a gentle arc between two points
-  // ---------------------------------------------------------------
-  function jumperWire(p1, p2, color, lift) {
-    lift = lift || 0.45;
-    var mid = new THREE.Vector3(
-      (p1.x + p2.x) / 2,
-      Math.max(p1.y, p2.y) + lift,
-      (p1.z + p2.z) / 2
+    stm32.position.set(
+    -4.4,
+    0,
+    0.95
     );
-    var curve = new THREE.QuadraticBezierCurve3(
-      new THREE.Vector3(p1.x, p1.y, p1.z),
-      mid,
-      new THREE.Vector3(p2.x, p2.y, p2.z)
+
+    scene.add(stm32);
+
+
+    var esp32 = buildESP32();
+
+    esp32.position.set(
+    0.4,
+    0,
+    1.0
     );
-    var geometry = new THREE.TubeGeometry(curve, 20, 0.035, 6, false);
-    var material = new THREE.MeshStandardMaterial({ color: color, roughness: 0.5 });
-    var wire = new THREE.Mesh(geometry, material);
-    wire.castShadow = true;
-    scene.add(wire);
-  }
 
-  var Y = 0.56;
-  jumperWire(new THREE.Vector3(-4.8, Y, 0.9), new THREE.Vector3(-2.6, Y, 0.9), 0xd23c3c);
-  jumperWire(new THREE.Vector3(-4.6, Y, 0.5), new THREE.Vector3(-2.6, Y, 0.5), 0x222222);
-  jumperWire(new THREE.Vector3(-0.6, Y, 1.4), new THREE.Vector3(2.4, Y, 1.4), 0x2f6fd2);
-  jumperWire(new THREE.Vector3(-0.3, Y, 0.7), new THREE.Vector3(3.9, Y, -0.3), 0xffd23b);
-  jumperWire(new THREE.Vector3(-4.3, Y, -0.4), new THREE.Vector3(-5.0, Y, -1.3), 0x2f6fd2);
-  jumperWire(new THREE.Vector3(-3.6, Y, -0.4), new THREE.Vector3(2.3, Y, -1.3), 0xd23c3c);
-  jumperWire(new THREE.Vector3(0.55, Y, -1.0), new THREE.Vector3(0.55, Y, -2.2), 0xd23c3c, 0.3);
-  jumperWire(new THREE.Vector3(0.0, Y, -1.0), new THREE.Vector3(0.0, Y, -2.2), 0x333333, 0.3);
-  jumperWire(new THREE.Vector3(-0.55, Y, -1.0), new THREE.Vector3(-0.55, Y, -2.2), 0x2f6fd2, 0.3);
-  jumperWire(new THREE.Vector3(2.5, Y, -0.9), new THREE.Vector3(2.9, Y, -1.7), 0x222222);
+    scene.add(esp32);
 
+
+    var dht22 = buildDHT22();
+
+    dht22.position.set(
+    3.65,
+    0,
+    1.25
+    );
+
+    scene.add(dht22);
+
+
+    var ina219 = buildINA219();
+
+    ina219.position.set(
+    3.55,
+    0,
+    -0.55
+    );
+
+    scene.add(ina219);
+
+
+    var flash = buildFlash();
+
+    flash.position.set(
+    -3.1,
+    0,
+    -1.85
+    );
+
+    scene.add(flash);
+
+
+    var max485 = buildMAX485();
+
+    max485.position.set(
+    1.15,
+    0,
+    -1.95
+    );
+
+    scene.add(max485);
+
+
+    // ---------------------------------------------------------------
+    // Status LEDs
+    // ---------------------------------------------------------------
+
+    var ledRed = buildLED(mat.ledRed);
+
+    ledRed.position.set(
+    -0.55,
+    0,
+    -2.55
+    );
+
+    scene.add(ledRed);
+
+
+    var ledYellow = buildLED(mat.ledYellow);
+
+    ledYellow.position.set(
+    0,
+    0,
+    -2.55
+    );
+
+    scene.add(ledYellow);
+
+
+    var ledGreen = buildLED(mat.ledGreen);
+
+    ledGreen.position.set(
+    0.55,
+    0,
+    -2.55
+    );
+
+    scene.add(ledGreen);
   // ---------------------------------------------------------------
   // Resize + render loop
   // ---------------------------------------------------------------
