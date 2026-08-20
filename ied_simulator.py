@@ -18,6 +18,7 @@ import time
 from db import get_conn, init_db, now
 from ledger import append_event
 from topology import NODES, EDGES, BASELINE_RANGES
+from zeek_sensor import emit_tick, reset_log_files
 
 TICK_SECONDS = 1.0
 
@@ -90,11 +91,17 @@ def tick(conn):
             "UPDATE nodes SET current_hash=?, last_seen=? WHERE id=?",
             (new_hash, now(), node["id"]),
         )
+
+    attacks_by_node = {}
+    for row in conn.execute("SELECT * FROM attacks WHERE active=1").fetchall():
+        attacks_by_node[row["node_id"]] = dict(row)
+    emit_tick(conn, attacks_by_node)
     conn.commit()
 
 
 def main():
     init_db(reset=True)
+    reset_log_files()
     seed_nodes()
     conn = get_conn()
     print("Simulator running. Ctrl+C to stop.")
