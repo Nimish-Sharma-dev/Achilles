@@ -5,7 +5,8 @@
   "use strict";
 
   var container = document.getElementById("twin-canvas");
-
+  container.style.position = "relative";
+  container.style.overflow = "hidden";
   // ---------------------------------------------------------------
   // Renderer / Scene / Camera
   // ---------------------------------------------------------------
@@ -68,19 +69,20 @@
 
 
   // ---------------------------------------------------------------
-  // Cube
+  // Cube — Tinkercad-style navigation cube
   // ---------------------------------------------------------------
 
   var navCubeGeometry =
     new THREE.BoxGeometry(2.0, 2.0, 2.0);
 
+  // Flat materials keep the cube clean and readable.
   var navCubeMaterials = [
-    new THREE.MeshStandardMaterial({ color: 0x557fb5 }),
-    new THREE.MeshStandardMaterial({ color: 0x557fb5 }),
-    new THREE.MeshStandardMaterial({ color: 0x6b92c2 }),
-    new THREE.MeshStandardMaterial({ color: 0x6b92c2 }),
-    new THREE.MeshStandardMaterial({ color: 0x456d9f }),
-    new THREE.MeshStandardMaterial({ color: 0x456d9f })
+    new THREE.MeshBasicMaterial({ color: 0xdfe7ec }),
+    new THREE.MeshBasicMaterial({ color: 0xdfe7ec }),
+    new THREE.MeshBasicMaterial({ color: 0xc9d7df }),
+    new THREE.MeshBasicMaterial({ color: 0xc9d7df }),
+    new THREE.MeshBasicMaterial({ color: 0xb9cbd5 }),
+    new THREE.MeshBasicMaterial({ color: 0xb9cbd5 })
   ];
 
   var navCube = new THREE.Mesh(
@@ -90,102 +92,160 @@
 
   navCubeScene.add(navCube);
 
-
-  // ---------------------------------------------------------------
-  // Cube edges
-  // ---------------------------------------------------------------
-
+  // Dark outline
   var navCubeEdges = new THREE.LineSegments(
     new THREE.EdgesGeometry(navCubeGeometry),
     new THREE.LineBasicMaterial({
-      color: 0xffffff,
+      color: 0x53636d,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.95
     })
   );
 
   navCube.add(navCubeEdges);
 
-
   // ---------------------------------------------------------------
-  // Face labels — attached to the cube
+  // Face labels
   // ---------------------------------------------------------------
 
   function makeCubeLabel(text) {
 
     var canvas = document.createElement("canvas");
 
-    canvas.width = 256;
-    canvas.height = 128;
+    canvas.width = 512;
+    canvas.height = 256;
 
     var ctx = canvas.getContext("2d");
 
-    ctx.clearRect(0, 0, 256, 128);
+    ctx.clearRect(
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
 
-    ctx.font = "600 34px Arial";
-    ctx.fillStyle = "#ffffff";
+    ctx.font =
+      "700 58px Arial, sans-serif";
+
+    ctx.fillStyle = "#26343d";
+
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
 
-    ctx.fillText(text, 128, 64);
-
-    var texture = new THREE.CanvasTexture(canvas);
-
-    var material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false
-    });
-
-    var plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.45, 0.72),
-      material
+    ctx.fillText(
+      text,
+      256,
+      128
     );
 
-    return plane;
+    var texture =
+      new THREE.CanvasTexture(canvas);
+
+    texture.minFilter =
+      THREE.LinearFilter;
+
+    texture.magFilter =
+      THREE.LinearFilter;
+
+    var material =
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        transparent: true,
+        depthWrite: false
+      });
+
+    return new THREE.Mesh(
+      new THREE.PlaneGeometry(1.35, 0.68),
+      material
+    );
   }
 
-
   // TOP
-  var topLabel = makeCubeLabel("TOP");
-  topLabel.position.set(0, 1.01, 0);
-  topLabel.rotation.x = -Math.PI / 2;
+  var topLabel =
+    makeCubeLabel("TOP");
+
+  topLabel.position.set(
+    0,
+    1.006,
+    0
+  );
+
+  topLabel.rotation.x =
+    -Math.PI / 2;
+
   navCube.add(topLabel);
 
-
   // FRONT
-  var frontLabel = makeCubeLabel("FRONT");
-  frontLabel.position.set(0, 0, 1.01);
+  var frontLabel =
+    makeCubeLabel("FRONT");
+
+  frontLabel.position.set(
+    0,
+    0,
+    1.006
+  );
+
   navCube.add(frontLabel);
 
-
   // RIGHT
-  var rightLabel = makeCubeLabel("RIGHT");
-  rightLabel.position.set(1.01, 0, 0);
-  rightLabel.rotation.y = Math.PI / 2;
+  var rightLabel =
+    makeCubeLabel("RIGHT");
+
+  rightLabel.position.set(
+    1.006,
+    0,
+    0
+  );
+
+  rightLabel.rotation.y =
+    Math.PI / 2;
+
   navCube.add(rightLabel);
 
-
   // LEFT
-  var leftLabel = makeCubeLabel("LEFT");
-  leftLabel.position.set(-1.01, 0, 0);
-  leftLabel.rotation.y = -Math.PI / 2;
+  var leftLabel =
+    makeCubeLabel("LEFT");
+
+  leftLabel.position.set(
+    -1.006,
+    0,
+    0
+  );
+
+  leftLabel.rotation.y =
+    -Math.PI / 2;
+
   navCube.add(leftLabel);
 
-
   // BACK
-  var backLabel = makeCubeLabel("BACK");
-  backLabel.position.set(0, 0, -1.01);
-  backLabel.rotation.y = Math.PI;
+  var backLabel =
+    makeCubeLabel("BACK");
+
+  backLabel.position.set(
+    0,
+    0,
+    -1.006
+  );
+
+  backLabel.rotation.y =
+    Math.PI;
+
   navCube.add(backLabel);
 
-
   // BOTTOM
-  var bottomLabel = makeCubeLabel("BOTTOM");
-  bottomLabel.position.set(0, -1.01, 0);
-  bottomLabel.rotation.x = Math.PI / 2;
-  navCube.add(bottomLabel);
+  var bottomLabel =
+    makeCubeLabel("BOTTOM");
 
+  bottomLabel.position.set(
+    0,
+    -1.006,
+    0
+  );
+
+  bottomLabel.rotation.x =
+    Math.PI / 2;
+
+  navCube.add(bottomLabel);
 
   // ---------------------------------------------------------------
   // Lighting
@@ -384,7 +444,305 @@
   floor.position.y = -0.03;
   floor.receiveShadow = true;
   scene.add(floor);
+  // ---------------------------------------------------------------
+  // Achilles physical telemetry state
+  // ---------------------------------------------------------------
 
+  var telemetry = {
+    mode: "NORMAL",
+
+    dht22: {
+      temperature: 31.6,
+      humidity: 63.2,
+      status: "NORMAL"
+    },
+
+    ina219: {
+      voltage: 12.08,
+      current: 0.82,
+      power: 9.91,
+      status: "NORMAL"
+    },
+
+    flash: {
+      firmware: "W25Q128",
+      hash: "MATCH",
+      attestation: "VALID",
+      status: "NORMAL"
+    },
+
+    max485: {
+      rx: "ACTIVE",
+      tx: "ACTIVE",
+      packetLoss: 0.2,
+      status: "TRUSTED"
+    },
+
+    trustScore: 98,
+    decision: "TRUSTED"
+  };
+
+  // ---------------------------------------------------------------
+  // Physical telemetry inspection panel
+  // ---------------------------------------------------------------
+
+  var telemetryPanel =
+    document.createElement("div");
+
+  telemetryPanel.style.position = "absolute";
+  telemetryPanel.style.left = "18px";
+  telemetryPanel.style.top = "18px";
+  telemetryPanel.style.width = "250px";
+  telemetryPanel.style.padding = "14px";
+  telemetryPanel.style.background = "rgba(247,250,252,0.97)";
+  telemetryPanel.style.boxShadow =
+  "0 8px 24px rgba(0,0,0,0.18)";
+  telemetryPanel.style.borderLeft =
+    "4px solid #1683c7";
+  telemetryPanel.style.lineHeight =
+    "1.45";
+  telemetryPanel.style.border = "1px solid #cfd3d8";
+  telemetryPanel.style.borderRadius = "6px";
+  telemetryPanel.style.fontFamily = "Arial, sans-serif";
+  telemetryPanel.style.fontSize = "12px";
+  telemetryPanel.style.color = "#20242a";
+  telemetryPanel.style.zIndex = "15";
+  telemetryPanel.style.display = "none";
+  telemetryPanel.style.pointerEvents = "none";
+
+  container.appendChild(telemetryPanel);
+
+  // ---------------------------------------------------------------
+  // Power-grid topology context
+  // ---------------------------------------------------------------
+
+  var gridContext = document.createElement("div");
+
+  gridContext.style.position = "absolute";
+  gridContext.style.left = "18px";
+  gridContext.style.bottom = "110px";
+  gridContext.style.width = "300px";
+  gridContext.style.height = "170px";
+  gridContext.style.display = "block";
+  gridContext.style.visibility = "visible";
+  gridContext.style.opacity = "1";
+  gridContext.style.background = "rgba(255,255,255,0.94)";
+  gridContext.style.border = "1px solid #9aa9b3";
+  gridContext.style.borderRadius = "6px";
+  gridContext.style.boxShadow =
+    "0 6px 18px rgba(0,0,0,0.16)";
+  gridContext.style.zIndex = "12";
+  gridContext.style.pointerEvents = "none";
+  gridContext.style.fontFamily =
+    "Arial, sans-serif";
+
+  gridContext.innerHTML = `
+  <svg
+    width="300"
+    height="170"
+    viewBox="0 0 300 170"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+
+    <text
+      x="150"
+      y="20"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="13"
+      font-weight="700"
+      fill="#26343d"
+    >
+      POWER GRID — IED LOCATION
+    </text>
+
+    <!-- Grid connection -->
+    <line
+      x1="150" y1="48"
+      x2="150" y2="70"
+      stroke="#596a75"
+      stroke-width="2"
+    />
+
+    <!-- Control center -->
+    <rect
+      x="100" y="30"
+      width="100"
+      height="20"
+      rx="3"
+      fill="#dfe7ec"
+      stroke="#53636d"
+    />
+
+    <text
+      x="150"
+      y="44"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="10"
+      font-weight="600"
+      fill="#26343d"
+    >
+      CONTROL CENTER
+    </text>
+
+    <!-- Main bus -->
+    <line
+      x1="45" y1="72"
+      x2="255" y2="72"
+      stroke="#53636d"
+      stroke-width="3"
+    />
+
+    <!-- Branches -->
+    <line
+      x1="75" y1="72"
+      x2="75" y2="100"
+      stroke="#53636d"
+      stroke-width="2"
+    />
+
+    <line
+      x1="150" y1="72"
+      x2="150" y2="100"
+      stroke="#53636d"
+      stroke-width="2"
+    />
+
+    <line
+      x1="225" y1="72"
+      x2="225" y2="100"
+      stroke="#53636d"
+      stroke-width="2"
+    />
+
+    <!-- Node 1 -->
+    <rect
+      x="45" y="100"
+      width="60"
+      height="24"
+      rx="3"
+      fill="#eef2f4"
+      stroke="#7b8a93"
+    />
+
+    <text
+      x="75"
+      y="115"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="9"
+      fill="#26343d"
+    >
+      RELAY
+    </text>
+
+    <!-- Node 2 -->
+    <rect
+      x="120" y="100"
+      width="60"
+      height="24"
+      rx="3"
+      fill="#eef2f4"
+      stroke="#7b8a93"
+    />
+
+    <text
+      x="150"
+      y="115"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="9"
+      fill="#26343d"
+    >
+      RTU
+    </text>
+
+    <!-- Achilles IED -->
+    <rect
+      x="195" y="96"
+      width="60"
+      height="32"
+      rx="3"
+      fill="#d9eef9"
+      stroke="#1683c7"
+      stroke-width="2"
+    />
+
+    <text
+      x="225"
+      y="110"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="9"
+      font-weight="700"
+      fill="#126a9e"
+    >
+      IED
+    </text>
+
+    <text
+      x="225"
+      y="121"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="7"
+      fill="#126a9e"
+    >
+      ACHILLES NODE
+    </text>
+
+    <!-- Physical node indicator -->
+    <line
+      x1="225" y1="128"
+      x2="225" y2="143"
+      stroke="#1683c7"
+      stroke-width="2"
+    />
+
+    <circle
+      cx="225"
+      cy="148"
+      r="5"
+      fill="#1683c7"
+    />
+
+    <text
+      x="150"
+      y="164"
+      text-anchor="middle"
+      font-family="Arial"
+      font-size="8"
+      fill="#697780"
+    >
+      SECURITY HARDWARE ATTACHED AT IED
+    </text>
+
+  </svg>
+  `;
+
+  container.appendChild(gridContext);
+  function showTelemetry(title, rows) {
+
+    telemetryPanel.style.display = "block";
+
+    var html =
+      '<div style="font-size:15px;font-weight:700;margin-bottom:10px;">' +
+      title +
+      '</div>';
+
+    rows.forEach(function(row) {
+
+      html +=
+        '<div style="display:flex;justify-content:space-between;margin:5px 0;">' +
+        '<span style="color:#6b7077;">' + row[0] + '</span>' +
+        '<strong>' + row[1] + '</strong>' +
+        '</div>';
+
+    });
+
+    telemetryPanel.innerHTML = html;
+  }
   // ---------------------------------------------------------------
   // Materials (reused)
   // ---------------------------------------------------------------
@@ -1178,6 +1536,152 @@
     var resistorGreen = buildResistor();
     resistorGreen.position.set(0.55, 0, -2.15);
     scene.add(resistorGreen);
+    // ---------------------------------------------------------------
+  // Hardware inspection
+  // ---------------------------------------------------------------
+
+  var selectableHardware = [
+    {
+      object: dht22,
+      name: "DHT22",
+      type: "dht"
+    },
+    {
+      object: ina219,
+      name: "INA219",
+      type: "ina"
+    },
+    {
+      object: flash,
+      name: "W25Q128",
+      type: "flash"
+    },
+    {
+      object: max485,
+      name: "MAX485",
+      type: "max"
+    },
+    {
+      object: stm32,
+      name: "STM32",
+      type: "stm"
+    }
+  ];
+
+  var hardwareRaycaster =
+    new THREE.Raycaster();
+
+  var hardwareMouse =
+    new THREE.Vector2();
+
+  renderer.domElement.addEventListener(
+    "click",
+    function(event) {
+
+      // Ignore clicks occurring over the navigation cube.
+      if (
+        event.clientX >
+        window.innerWidth - 210
+      ) {
+        return;
+      }
+
+      var rect =
+        renderer.domElement.getBoundingClientRect();
+
+      hardwareMouse.x =
+        ((event.clientX - rect.left) / rect.width) * 2 - 1;
+
+      hardwareMouse.y =
+        -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      hardwareRaycaster.setFromCamera(
+        hardwareMouse,
+        camera
+      );
+
+      for (
+        var i = 0;
+        i < selectableHardware.length;
+        i++
+      ) {
+
+        var item =
+          selectableHardware[i];
+
+        var hits =
+          hardwareRaycaster.intersectObject(
+            item.object,
+            true
+          );
+
+        if (!hits.length) {
+          continue;
+        }
+
+        if (item.type === "dht") {
+
+          showTelemetry(
+            "DHT22 — ENVIRONMENTAL TELEMETRY",
+            [
+              ["Temperature", telemetry.dht22.temperature + " °C"],
+              ["Humidity", telemetry.dht22.humidity + " %"],
+              ["Status", telemetry.dht22.status]
+            ]
+          );
+
+        } else if (item.type === "ina") {
+
+          showTelemetry(
+            "INA219 — POWER TELEMETRY",
+            [
+              ["Voltage", telemetry.ina219.voltage + " V"],
+              ["Current", telemetry.ina219.current + " A"],
+              ["Power", telemetry.ina219.power + " W"],
+              ["Status", telemetry.ina219.status]
+            ]
+          );
+
+        } else if (item.type === "flash") {
+
+          showTelemetry(
+            "W25Q128 — FIRMWARE INTEGRITY",
+            [
+              ["Firmware", telemetry.flash.firmware],
+              ["Hash", telemetry.flash.hash],
+              ["Attestation", telemetry.flash.attestation],
+              ["Status", telemetry.flash.status]
+            ]
+          );
+
+        } else if (item.type === "max") {
+
+          showTelemetry(
+            "MAX485 — COMMUNICATION TELEMETRY",
+            [
+              ["RX", telemetry.max485.rx],
+              ["TX", telemetry.max485.tx],
+              ["Packet loss", telemetry.max485.packetLoss + " %"],
+              ["Link", telemetry.max485.status]
+            ]
+          );
+
+        } else if (item.type === "stm") {
+
+          showTelemetry(
+            "STM32 — TRUST DECISION",
+            [
+              ["Trust score", telemetry.trustScore + " %"],
+              ["Decision", telemetry.decision],
+              ["Mode", telemetry.mode]
+            ]
+          );
+        }
+
+        return;
+      }
+    }
+  );
 
     // Physical wiring
     // Red    = VCC
