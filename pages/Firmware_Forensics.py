@@ -1,5 +1,5 @@
 """
-pages/1_🔬_Firmware_Forensics.py
+pages/Firmware_Forensics.py
 
 Streamlit auto-discovers files in pages/ next to dashboard.py and adds them
 to the sidebar nav — run `streamlit run dashboard.py` as usual and this
@@ -14,21 +14,26 @@ Two real tools, wired for a live demo:
              lm3s6965evb -nographic`), UART transcript diffed line by line.
   - GUI:     a button that launches the actual Ghidra desktop app in its
              own window, pointed at the pre-imported project, for a live
-             on-stage decompiler walkthrough. See ghidra_setup.sh — run
-             that once before the demo so the project already exists.
+             on-stage decompiler walkthrough.
 """
 
 import json
 import subprocess
 import time
-
+import os
 import streamlit as st
-
 import firmware_forensics as ff
 from db import get_conn
 from ledger import append_event
 
-st.set_page_config(page_title="GridSentinel — Firmware Forensics", layout="wide")
+# ----------------------------------------------------------------------------
+# PAGE CONFIG — sidebar expanded by default, header visible for toggle arrow
+# ----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="GridSentinel — Firmware Forensics",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 COLORS = {
     "bg": "#0A0E14", "panel": "#12161F", "border": "#1F2733",
@@ -40,7 +45,9 @@ st.markdown(f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 html, body, [class*="css"] {{ background-color: {COLORS['bg']} !important; color: {COLORS['text']}; }}
-#MainMenu, footer, header {{visibility: hidden;}}
+#MainMenu {{visibility: hidden;}}
+footer {{visibility: hidden;}}
+/* header kept visible — sidebar toggle arrow remains */
 .wordmark {{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.8rem; }}
 .eyebrow {{ font-family:'JetBrains Mono',monospace; color:{COLORS['accent']}; letter-spacing:.15em;
             font-size:.75rem; text-transform:uppercase; }}
@@ -79,8 +86,8 @@ for col, (label, path) in zip(cols, tool_labels):
 if not status["ghidra_headless"]:
     st.markdown(f'<div class="mono" style="color:{COLORS["text_dim"]};margin-top:8px;">'
                 f'Ghidra not detected — static analysis will use the nm/entropy fallback tier automatically. '
-                f'Set the <code>GHIDRA_HOME</code> environment variable and re-run to enable Ghidra headless. '
-                f'See ghidra_setup.sh.</div>', unsafe_allow_html=True)
+                f'Set the <code>GHIDRA_HOME</code> environment variable and re-run to enable Ghidra headless.</div>',
+                unsafe_allow_html=True)
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
@@ -128,34 +135,107 @@ with c2:
 st.markdown("<hr>", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# GHIDRA GUI LAUNCH — real native window, for the live decompiler walkthrough
+# GHIDRA GUI LAUNCH
 # ----------------------------------------------------------------------------
 st.markdown('<div class="eyebrow">LIVE DECOMPILER WALKTHROUGH</div>', unsafe_allow_html=True)
 st.markdown("Opens the real Ghidra desktop app in its own window on this machine, "
-            "pointed at the pre-imported project (run `ghidra_setup.sh` once before the demo "
-            "so both binaries are already imported and analyzed — launching cold mid-demo is slow).")
+            "pointed at the pre-imported project.")
 if st.button("🖥️ Launch Ghidra GUI", type="primary"):
     ghidra_gui = status["ghidra_gui"]
     if not ghidra_gui:
         st.error("ghidraRun not found. Set GHIDRA_HOME or add Ghidra's install dir to PATH.")
     else:
         try:
-            subprocess.Popen([ghidra_gui], cwd=ff.GHIDRA_PROJECT_DIR if __import__("os").path.exists(ff.GHIDRA_PROJECT_DIR) else None)
-            st.success("Ghidra launching in a new window — open GridSentinelDemo.gpr from the project view "
-                       "(created by ghidra_setup.sh) and pick firmware_tampered.elf.")
+            project_file = os.path.join(ff.GHIDRA_PROJECT_DIR, ff.GHIDRA_PROJECT_NAME + ".gpr")
+            if not os.path.exists(project_file):
+                st.error(f"Project file not found: {project_file}")
+            else:
+                subprocess.Popen([ghidra_gui, project_file],
+                                 cwd=ff.GHIDRA_PROJECT_DIR if os.path.exists(ff.GHIDRA_PROJECT_DIR) else None)
+                st.success(f"Ghidra launching with project {project_file}.")
         except Exception as e:
             st.error(f"Couldn't launch Ghidra: {e}")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# STATIC ANALYSIS
+# STATIC ANALYSIS — FULL REPORT
 # ----------------------------------------------------------------------------
-st.markdown('<div class="eyebrow">STATIC ANALYSIS — GHIDRA / SYMBOL DIFF</div>', unsafe_allow_html=True)
-if st.button("▶ Run static analysis", type="primary"):
-    with st.spinner("Diffing function symbols against golden baseline…"):
+st.markdown('<div class="eyebrow">STATIC ANALYSIS — FULL FIRMWARE REPORT</div>', unsafe_allow_html=True)
+st.markdown("Runs a comprehensive static analysis: metadata, entropy, unpacking (binwalk), YARA scanning, and control‑flow function diff.")
+
+if st.button("▶ Run full static analysis", type="primary"):
+    with st.spinner("Analyzing firmware (metadata, unpacking, YARA, CFG)…"):
+        try:
+            result = ff.run_full_static_analysis(node_id)
+            st.session_state["full_static_result"] = result
+        except Exception as e:
+            st.error(f"Analysis failed: {e}")
+            st.session_state["full_static_result"] = None
+
+if "full_static_result" in st.session_state and st.session_state["full_static_result"]:
+    r = st.session_state["full_static_result"]
+    verdict = r.get("verdict", "UNKNOWN")
+    vcolor = {"CLEAN": COLORS["healthy"], "SUSPICIOUS": COLORS["warn"],
+              "TROJAN_DETECTED": COLORS["critical"]}.get(verdict, COLORS["text_dim"])
+    st.markdown(f'<span class="status-pill mono" style="background:{vcolor}22;color:{vcolor};'
+                f'border:1px solid {vcolor};">VERDICT: {verdict}</span>', unsafe_allow_html=True)
+
+    if r.get("warnings"):
+        st.warning("⚠️ " + " | ".join(r["warnings"]))
+
+    # Metadata
+    with st.expander("📄 Firmware Metadata", expanded=True):
+        meta = r["metadata"]
+        cols = st.columns(4)
+        cols[0].metric("Architecture", meta["architecture"])
+        cols[1].metric("Size", f"{meta['file_size_bytes']} bytes")
+        cols[2].metric("Entropy", meta["entropy"])
+        cols[3].metric("Hash Match", "✅ Match" if meta["hash_match"] else "❌ Mismatch")
+        st.code(f"Golden hash: {meta['golden_hash']}\nCurrent hash: {meta['current_hash']}", language="text")
+
+    # Unpacking
+    with st.expander("📦 Unpacking (binwalk)", expanded=True):
+        unpack = r["unpacking"]
+        if unpack.get("available"):
+            st.code(unpack.get("output", "No output"), language="text")
+        else:
+            st.info(unpack.get("output", "binwalk not available"))
+
+    # YARA
+    with st.expander("🔍 YARA Signature Scan", expanded=True):
+        yara = r["yara"]
+        if yara.get("available"):
+            if yara.get("matches"):
+                st.error("❗ Matched rules:\n" + "\n".join(yara["matches"]))
+            else:
+                st.success("No known malware signatures detected.")
+        else:
+            st.info(yara.get("output", "yara not available"))
+
+    # CFG / Function Diff
+    with st.expander("📊 Control‑Flow Graph Summary", expanded=True):
+        cfg = r["cfg"]
+        st.metric("Total Functions", cfg.get("function_count", "N/A"))
+        st.markdown(f"**Status:** {cfg['status']}")
+        if cfg.get("anomaly") and cfg["anomaly"] != "No anomalies":
+            st.error(f"🚨 {cfg['anomaly']}")
+        if cfg.get("added_functions"):
+            st.markdown("**Added functions (potential backdoors):**")
+            for fn in cfg["added_functions"]:
+                st.markdown(f"- `{fn}`")
+
+    with st.expander("Raw analysis JSON"):
+        st.json(r)
+
+# ----------------------------------------------------------------------------
+# LEGACY STATIC ANALYSIS (simple diff) - keep for comparison
+# ----------------------------------------------------------------------------
+st.markdown('<div class="eyebrow">LEGACY: Symbol Diff (Ghidra/nm)</div>', unsafe_allow_html=True)
+if st.button("▶ Run symbol diff (old style)", type="secondary"):
+    with st.spinner("Diffing function symbols…"):
         result = ff.run_static_analysis(node_id)
-    st.session_state["static_result"] = result
+        st.session_state["static_result"] = result
 
 if "static_result" in st.session_state:
     r = st.session_state["static_result"]
@@ -167,40 +247,20 @@ if "static_result" in st.session_state:
                 f'<span class="mono" style="color:{COLORS["text_dim"]};font-size:.8rem;">tool={r.get("tool")}</span>',
                 unsafe_allow_html=True)
 
-    sc1, sc2 = st.columns(2)
-    with sc1:
-        st.markdown("**Added functions (present in scanned firmware, absent from baseline)**")
-        added = r.get("added_functions", [])
-        if added:
-            for fn in added:
-                st.markdown(f'<div class="mono" style="color:{COLORS["critical"]};">+ {fn}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="mono" style="color:{COLORS["text_dim"]};">none</div>', unsafe_allow_html=True)
-    with sc2:
-        if "baseline_size_bytes" in r:
-            st.markdown("**Byte-level / entropy diff**")
-            st.markdown(f'''<div class="mono" style="font-size:.8rem;">
-                size: {r["baseline_size_bytes"]} → {r["current_size_bytes"]} bytes
-                ({"+" if r["size_delta_bytes"]>=0 else ""}{r["size_delta_bytes"]})<br>
-                entropy: {r["baseline_entropy"]} → {r["current_entropy"]}
-                </div>''', unsafe_allow_html=True)
-        elif "baseline_function_count" in r:
-            st.markdown("**Ghidra function counts**")
-            st.markdown(f'<div class="mono" style="font-size:.8rem;">'
-                        f'{r["baseline_function_count"]} → {r["current_function_count"]} functions</div>',
-                        unsafe_allow_html=True)
-
-    with st.expander("Raw scan output (JSON)"):
-        st.code(json.dumps(r, indent=2), language="json")
+    st.markdown("**Added functions:**")
+    if r.get("added_functions"):
+        for fn in r["added_functions"]:
+            st.markdown(f'+ `{fn}`')
+    else:
+        st.markdown("none")
 
 st.markdown("<hr>", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------------
-# DYNAMIC ANALYSIS
+# DYNAMIC ANALYSIS (QEMU)
 # ----------------------------------------------------------------------------
 st.markdown('<div class="eyebrow">DYNAMIC ANALYSIS — QEMU EMULATION</div>', unsafe_allow_html=True)
-st.markdown("Actually boots both firmware images under `qemu-system-arm -M lm3s6965evb -nographic` "
-            "and diffs the real UART transcript. Takes a few seconds — QEMU is genuinely executing the code.")
+st.markdown("Boots both firmware images under QEMU and diffs UART transcripts.")
 if st.button("▶ Run QEMU emulation", type="primary"):
     with st.spinner("Booting baseline and current firmware under QEMU (≈8s)…"):
         result = ff.run_dynamic_analysis(node_id, seconds=4)

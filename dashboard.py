@@ -26,7 +26,15 @@ from db import get_conn
 from ledger import get_ledger, verify_chain, append_event
 from detection import build_graph, blast_radius
 from detection import overall_threat_level
-st.set_page_config(page_title="GridSentinel", layout="wide", initial_sidebar_state="expanded")
+
+# ----------------------------------------------------------------------------
+# PAGE CONFIG — sidebar expanded by default, header visible for toggle arrow
+# ----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="GridSentinel",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ----------------------------------------------------------------------------
 # THEME
@@ -53,8 +61,12 @@ html, body, [class*="css"] {{
     color: {COLORS['text']};
     font-family: 'IBM Plex Sans', sans-serif;
 }}
-#MainMenu, footer, header {{visibility: hidden;}}
-.block-container {{ padding-top: 1.2rem; max-width: 1500px; }}
+/* Keep header visible – this preserves the sidebar toggle arrow */
+#MainMenu {{visibility: hidden;}}
+footer {{visibility: hidden;}}
+/* header is NOT hidden */
+
+.block-container {{ padding-top: 3rem; max-width: 1500px; }}
 
 .eyebrow {{
     font-family: 'JetBrains Mono', monospace;
@@ -149,7 +161,8 @@ def _dark_line_chart(df, y_cols, colors, title, y_suffix=""):
     return fig
 
 
-
+def overall_threat_level(nodes):
+    """Returns (level_string, color_hex) based on node statuses."""
     statuses = [n["status"] for n in nodes]
     if "CRITICAL" in statuses:
         return "CRITICAL", COLORS["critical"]
