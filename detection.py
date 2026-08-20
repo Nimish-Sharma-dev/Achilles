@@ -22,7 +22,7 @@ import time
 import statistics
 import networkx as nx
 
-from db import get_conn, now
+from db import get_conn, now, ensure_schema
 from ledger import append_event
 from topology import BASELINE_RANGES
 
@@ -132,6 +132,40 @@ def check_integrity(conn):
             raise_alert(conn, r["id"], "CRITICAL", "INTEGRITY", msg)
 
 
+def check_zeek(conn):
+    """Raise NETWORK alerts from Zeek notice.log. De-dupes per node for 20s."""
+    cutoff = now() - TICK_SECONDS * 4
+    rows = conn.execute(
+        """SELECT node_id, notice_type, msg, orig_h, resp_h FROM zeek_logs
+           WHERE log_type='notice' AND anomaly=1 AND ts>=?
+           ORDER BY id DESC""",
+        (cutoff,),
+    ).fetchall()
+    seen = set()
+    for r in rows:
+        node_id = r["node_id"]
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        status_row = conn.execute("SELECT status FROM nodes WHERE id=?", (node_id,)).fetchone()
+        if not status_row or status_row["status"] in ("CRITICAL", "QUARANTINED"):
+            continue
+        recent = conn.execute(
+            "SELECT 1 FROM alerts WHERE node_id=? AND category='NETWORK' AND ts>? LIMIT 1",
+            (node_id, now() - 20),
+        ).fetchone()
+        if recent:
+            continue
+        note = r["notice_type"] or "ICS::NetworkAnomaly"
+        critical = note in ("ICS::ReplayFlood", "ICS::FirmwareC2Beacon", "ICS::GOOSEStorm")
+        severity = "CRITICAL" if critical else "WARN"
+        g = build_graph(conn)
+        radius = blast_radius(g, node_id)
+        msg = (f"Zeek {note} on {node_id} ({r['orig_h']} → {r['resp_h']}). {r['msg']} "
+               f"Blast radius ({len(radius)} nodes): {', '.join(radius) if radius else 'none'}")
+        raise_alert(conn, node_id, severity, "NETWORK", msg)
+
+
 def check_behavioral(conn):
     node_rows = conn.execute("SELECT id, status FROM nodes").fetchall()
     for nr in node_rows:
@@ -191,12 +225,14 @@ def compute_and_record_risk(conn):
 
 
 def main():
+    ensure_schema()
     print("Detection engine running. Ctrl+C to stop.")
     try:
         while True:
             conn = get_conn()
             check_integrity(conn)
             check_behavioral(conn)
+            check_zeek(conn)
             compute_and_record_risk(conn)
             conn.close()
             time.sleep(TICK_SECONDS)

@@ -36,6 +36,26 @@ EDGES = [
     ("RELAY-03", "METER-04", "Modbus"),
 ]
 
+# OT LAN addresses used by the Zeek sensor (SPAN stand-in).
+NODE_IPS = {
+    "RTU-01":    "10.4.1.10",
+    "BCU-01":    "10.4.1.21",
+    "BCU-02":    "10.4.1.22",
+    "RELAY-01":  "10.4.2.31",
+    "RELAY-02":  "10.4.2.32",
+    "RELAY-03":  "10.4.2.33",
+    "METER-01":  "10.4.3.41",
+    "METER-02":  "10.4.3.42",
+    "METER-03":  "10.4.3.43",
+    "METER-04":  "10.4.3.44",
+}
+
+PROTO_PORTS = {
+    "DNP3": 20000,
+    "Modbus": 502,
+    "IEC61850-GOOSE": 102,
+}
+
 # Baseline "normal" telemetry ranges per node type — simulator samples around these
 BASELINE_RANGES = {
     "rtu":   {"voltage": (228, 232), "current": (10, 14),  "temp": (30, 40)},

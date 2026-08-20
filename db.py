@@ -99,6 +99,27 @@ CREATE TABLE IF NOT EXISTS firmware_scans (
     verdict     TEXT,        -- CLEAN | SUSPICIOUS | TROJAN_DETECTED
     details     TEXT         -- JSON string
 );
+
+CREATE TABLE IF NOT EXISTS zeek_logs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          REAL,
+    log_type    TEXT,         -- conn | notice | dnp3 | modbus | goose | weird
+    uid         TEXT,
+    node_id     TEXT,
+    peer_id     TEXT,
+    proto       TEXT,
+    notice_type TEXT,
+    msg         TEXT,
+    orig_h      TEXT,
+    orig_p      INTEGER,
+    resp_h      TEXT,
+    resp_p      INTEGER,
+    orig_bytes  INTEGER,
+    resp_bytes  INTEGER,
+    conn_state  TEXT,
+    anomaly     INTEGER DEFAULT 0,
+    raw         TEXT
+);
 """
 
 
@@ -110,6 +131,14 @@ def init_db(reset=False):
     conn.commit()
     conn.close()
     print(f"DB ready at {DB_PATH}")
+
+
+def ensure_schema():
+    """Add any new tables to an already-running DB without a full reset."""
+    conn = get_conn()
+    conn.executescript(SCHEMA)
+    conn.commit()
+    conn.close()
 
 
 def now():
