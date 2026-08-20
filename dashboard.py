@@ -112,6 +112,23 @@ def load_state():
         "SELECT * FROM alerts ORDER BY id DESC LIMIT 30")]
     conn.close()
     return nodes, edges, alerts
+def load_latest_telemetry(node_id):
+    conn = get_conn()
+
+    row = conn.execute(
+        """
+        SELECT ts, voltage, current, temp
+        FROM telemetry
+        WHERE node_id = ?
+        ORDER BY ts DESC
+        LIMIT 1
+        """,
+        (node_id,)
+    ).fetchone()
+
+    conn.close()
+
+    return dict(row) if row else None
 
 
 def overall_threat_level(nodes):
@@ -131,6 +148,15 @@ STATUS_COLOR = {
     "CRITICAL": COLORS["critical"],
     "QUARANTINED": COLORS["quarantined"],
 }
+def get_risk_color(risk_score):
+    risk_score = float(risk_score or 0)
+
+    if risk_score >= 80:
+        return COLORS["critical"]
+    elif risk_score >= 50:
+        return COLORS["warn"]
+    else:
+        return COLORS["healthy"]
 
 SHAPES = {"rtu": "hex", "bcu": "rect", "relay": "diamond", "meter": "circle"}
 
@@ -266,13 +292,60 @@ def live_view():
                 <b>{a["severity"]}</b> · {ts} · {a["node_id"]}<br>
                 <span style="color:{COLORS['text_dim']}">{a["message"]}</span>
                 </div>''', unsafe_allow_html=True)
-
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="eyebrow">NODE STATUS</div>', unsafe_allow_html=True)
-    df = pd.DataFrame(nodes)[["id", "type", "vendor", "model", "status", "risk_score", "current_hash"]]
-    df["current_hash"] = df["current_hash"].str[:12] + "…"
-    st.dataframe(df, use_container_width=True, hide_index=True)
 
+    st.markdown(
+        '<div class="eyebrow">NODE STATUS</div>',
+        unsafe_allow_html=True
+    )
+
+    df = pd.DataFrame(nodes)[
+        [
+            "id",
+            "type",
+            "vendor",
+            "model",
+            "status",
+            "risk_score",
+            "golden_hash",
+            "current_hash"
+        ]
+    ].copy()
+
+    df["hash_status"] = df.apply(
+        lambda row:
+            "VERIFIED"
+            if row["golden_hash"] == row["current_hash"]
+            else "MISMATCH",
+        axis=1
+    )
+
+    df["golden_hash"] = (
+        df["golden_hash"].str[:12] + "…"
+    )
+
+    df["current_hash"] = (
+        df["current_hash"].str[:12] + "…"
+    )
+
+    df = df[
+        [
+            "id",
+            "type",
+            "vendor",
+            "model",
+            "status",
+            "risk_score",
+            "hash_status",
+            "current_hash"
+        ]
+    ]
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True
+    )
 
 live_view()
 
@@ -283,46 +356,380 @@ st.markdown("<hr>", unsafe_allow_html=True)
 # (kept outside the auto-refresh fragment so the confirm button doesn't
 #  vanish mid-click)
 # ----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# NODE INSPECTOR + HUMAN-IN-THE-LOOP QUARANTINE
+# ----------------------------------------------------------------------------
+
 nodes, edges, alerts = load_state()
 node_ids = [n["id"] for n in nodes]
 
-st.markdown('<div class="eyebrow">NODE INSPECTOR & ENFORCEMENT</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="eyebrow">NODE INSPECTOR & ENFORCEMENT</div>',
+    unsafe_allow_html=True
+)
+
 c1, c2 = st.columns([1, 2])
 
+# -------------------------------------------------------------------------
+# NODE SELECTOR
+# -------------------------------------------------------------------------
+
 with c1:
-    selected = st.selectbox("Select node", node_ids)
-    node = next(n for n in nodes if n["id"] == selected)
-    color = STATUS_COLOR.get(node["status"])
-    st.markdown(f'''<div class="panel">
-        <div class="status-pill" style="background:{color}22;color:{color};border:1px solid {color};">{node["status"]}</div>
-        <p class="mono" style="margin-top:10px;font-size:0.8rem;">
-        VENDOR &nbsp;{node["vendor"]}<br>
-        MODEL &nbsp;{node["model"]}<br>
-        GOLDEN &nbsp;{node["golden_hash"][:16]}…<br>
-        CURRENT&nbsp;{node["current_hash"][:16]}…<br>
-        MATCH &nbsp;{"YES" if node["golden_hash"]==node["current_hash"] else "NO — MISMATCH"}
-        </p></div>''', unsafe_allow_html=True)
+
+    selected = st.selectbox(
+        "Select node",
+        node_ids
+    )
+
+    node = next(
+        n for n in nodes
+        if n["id"] == selected
+    )
+
+    telemetry = load_latest_telemetry(selected)
+
+    status = node["status"]
+
+    status_color = STATUS_COLOR.get(
+        status,
+        COLORS["healthy"]
+    )
+
+    risk_score = float(
+        node["risk_score"] or 0
+    )
+
+    risk_color = get_risk_color(
+        risk_score
+    )
+
+    # -------------------------------------------------------------
+    # DEVICE STATUS
+    # -------------------------------------------------------------
+
+    st.markdown(
+        f"""
+        <div class="panel">
+
+            <div class="eyebrow">
+                DEVICE STATUS
+            </div>
+
+            <div style="margin-top:8px;">
+
+                <span class="status-pill"
+                    style="
+                    background:{status_color}22;
+                    color:{status_color};
+                    border:1px solid {status_color};
+                    ">
+                    {status}
+                </span>
+
+            </div>
+
+            <div class="mono"
+                style="
+                margin-top:15px;
+                font-size:0.8rem;
+                line-height:1.8;
+                ">
+
+                DEVICE&nbsp;&nbsp;&nbsp; {node["id"]}<br>
+                TYPE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {node["type"].upper()}<br>
+                VENDOR&nbsp;&nbsp;&nbsp; {node["vendor"]}<br>
+                MODEL&nbsp;&nbsp;&nbsp;&nbsp; {node["model"]}<br>
+                SERIAL&nbsp;&nbsp;&nbsp; {node["serial"]}
+
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # -------------------------------------------------------------
+    # RISK SCORE
+    # -------------------------------------------------------------
+
+    st.markdown(
+        f"""
+        <div class="panel"
+            style="margin-top:10px;">
+
+            <div class="eyebrow">
+                RISK SCORE
+            </div>
+
+            <div style="
+                font-family:'JetBrains Mono';
+                font-size:2.3rem;
+                font-weight:700;
+                color:{risk_color};
+                margin-top:5px;
+            ">
+
+                {risk_score:.0f}
+
+                <span style="
+                    font-size:0.9rem;
+                    color:{COLORS["text_dim"]};
+                ">
+                    / 100
+                </span>
+
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # -------------------------------------------------------------
+    # HASH STATUS
+    # -------------------------------------------------------------
+
+    hash_match = (
+        node["golden_hash"]
+        == node["current_hash"]
+    )
+
+    hash_status = (
+        "VERIFIED"
+        if hash_match
+        else "MISMATCH"
+    )
+
+    hash_color = (
+        COLORS["healthy"]
+        if hash_match
+        else COLORS["critical"]
+    )
+
+    st.markdown(
+        f"""
+        <div class="panel"
+            style="margin-top:10px;">
+
+            <div class="eyebrow">
+                FIRMWARE INTEGRITY
+            </div>
+
+            <div class="status-pill"
+                style="
+                margin-top:8px;
+                background:{hash_color}22;
+                color:{hash_color};
+                border:1px solid {hash_color};
+                ">
+                {hash_status}
+            </div>
+
+            <div class="mono"
+                style="
+                margin-top:12px;
+                font-size:0.72rem;
+                line-height:1.8;
+                ">
+
+                GOLDEN<br>
+                {node["golden_hash"][:20]}…
+
+                <br><br>
+
+                CURRENT<br>
+                {node["current_hash"][:20]}…
+
+            </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# -------------------------------------------------------------------------
+# RIGHT SIDE
+# -------------------------------------------------------------------------
 
 with c2:
-    st.markdown("**Enforcement action** — quarantine changes the *system's model* of the node; "
-                "actual isolation would be a separate SDN/switch-port action (see architecture doc). "
-                "Human-in-the-loop by design: ICS prioritizes availability, so nothing disruptive fires automatically.")
-    if node["status"] == "QUARANTINED":
-        st.success(f"{selected} is currently quarantined.")
-        if st.button("Restore node to service"):
-            conn = get_conn()
-            conn.execute("UPDATE nodes SET status='HEALTHY', current_hash=golden_hash WHERE id=?", (selected,))
-            conn.execute("UPDATE attacks SET active=0 WHERE node_id=?", (selected,))
-            conn.commit(); conn.close()
-            append_event("NODE_RESTORED", {"node_id": selected})
-            st.rerun()
+
+    # -------------------------------------------------------------
+    # LIVE TELEMETRY
+    # -------------------------------------------------------------
+
+    st.markdown(
+        '<div class="eyebrow">LIVE TELEMETRY</div>',
+        unsafe_allow_html=True
+    )
+
+    if telemetry:
+
+        ts = time.strftime(
+            "%H:%M:%S",
+            time.localtime(
+                telemetry["ts"]
+            )
+        )
+
+        t1, t2, t3 = st.columns(3)
+
+        with t1:
+            st.metric(
+                "VOLTAGE",
+                f'{telemetry["voltage"]:.2f} V'
+            )
+
+        with t2:
+            st.metric(
+                "CURRENT",
+                f'{telemetry["current"]:.2f} A'
+            )
+
+        with t3:
+            st.metric(
+                "TEMPERATURE",
+                f'{telemetry["temp"]:.2f} °C'
+            )
+
+        st.caption(
+            f"Last telemetry update: {ts}"
+        )
+
     else:
-        confirm = st.checkbox(f"I confirm I want to quarantine {selected}")
-        if st.button("Quarantine node", type="primary", disabled=not confirm):
+
+        st.info(
+            "No telemetry available for this device."
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # -------------------------------------------------------------
+    # ENFORCEMENT
+    # -------------------------------------------------------------
+
+    st.markdown(
+        '<div class="eyebrow">ENFORCEMENT ACTION</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="panel">
+
+        <div class="mono"
+        style="font-size:0.8rem;line-height:1.7;">
+
+        Detection is automatic.<br>
+        Enforcement requires operator confirmation.<br><br>
+
+        Quarantine changes the device state in the
+        GridSentinel model. Physical isolation would
+        be handled separately by an SDN/switch layer.
+
+        </div>
+
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # -------------------------------------------------------------
+    # ALREADY QUARANTINED
+    # -------------------------------------------------------------
+
+    if status == "QUARANTINED":
+
+        st.warning(
+            f"{selected} is currently quarantined."
+        )
+
+        if st.button(
+            "Restore node to service",
+            use_container_width=True
+        ):
+
             conn = get_conn()
-            conn.execute("UPDATE nodes SET status='QUARANTINED' WHERE id=?", (selected,))
-            conn.commit(); conn.close()
-            append_event("NODE_QUARANTINED", {"node_id": selected, "operator_confirmed": True})
+
+            conn.execute(
+                """
+                UPDATE nodes
+                SET status='HEALTHY',
+                    current_hash=golden_hash
+                WHERE id=?
+                """,
+                (selected,)
+            )
+
+            conn.execute(
+                """
+                UPDATE attacks
+                SET active=0
+                WHERE node_id=?
+                """,
+                (selected,)
+            )
+
+            conn.commit()
+            conn.close()
+
+            append_event(
+                "NODE_RESTORED",
+                {
+                    "node_id": selected
+                }
+            )
+
+            st.rerun()
+
+    # -------------------------------------------------------------
+    # QUARANTINE
+    # -------------------------------------------------------------
+
+    else:
+
+        confirm = st.checkbox(
+            f"I confirm I want to quarantine {selected}"
+        )
+
+        if st.button(
+            "QUARANTINE NODE",
+            type="primary",
+            disabled=not confirm,
+            use_container_width=True
+        ):
+
+            conn = get_conn()
+
+            conn.execute(
+                """
+                UPDATE nodes
+                SET status='QUARANTINED'
+                WHERE id=?
+                """,
+                (selected,)
+            )
+
+            conn.commit()
+            conn.close()
+
+            append_event(
+                "NODE_QUARANTINED",
+                {
+                    "node_id": selected,
+                    "operator_confirmed": True,
+                    "risk_score": risk_score
+                }
+            )
+
+            st.success(
+                f"{selected} has been quarantined."
+            )
+
+            time.sleep(0.5)
+
             st.rerun()
 
 st.markdown("<hr>", unsafe_allow_html=True)
