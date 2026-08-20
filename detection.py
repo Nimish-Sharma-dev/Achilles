@@ -1,140 +1,233 @@
 """
-detection.py — PERSON B's file.
+detection.py — Person B: the "brain".
 
-Runs continuously alongside the simulator. Each tick:
-  1. pulls latest telemetry per node
-  2. checks integrity (current_hash vs golden_hash) -> CRITICAL alert
-  3. checks behavioral anomaly (z-score vs rolling baseline) -> WARN/CRITICAL
-  4. on CRITICAL, computes blast radius via graph traversal and writes it
-     into the alert message so the dashboard can highlight the subgraph
-  5. writes every alert to the ledger (tamper-evident audit trail)
+Runs continuously alongside ied_simulator.py, polling the same DB every
+tick. Three independent checks per node, matching the three demo attacks:
 
-Deliberately uses simple statistical thresholds, not a trained ML model.
-For a 24h demo, threshold logic is what you can *guarantee* fires
-correctly live on stage. Isolation Forest/LSTM are real upgrades — wire
-them in behind the same interface (see score_anomaly()) after the
-threshold version works end-to-end, only if time allows.
+  INTEGRITY   golden_hash vs current_hash, straight comparison. No
+              thresholding needed — any mismatch is unambiguous, so this
+              is always CRITICAL. (Triggered by attack_injector.py
+              firmware-tamper.)
 
-Run standalone:  python detection.py
+  BEHAVIORAL  rolling z-score per node/channel against that node's OWN
+              telemetry history (not a hardcoded global threshold — a
+              relay and a meter have different normal ranges, and this
+              adapts per node automatically). (Triggered by sensor-spike.)
+
+  NETWORK     exact-repeat detection on consecutive telemetry rows — real
+              sensor noise never lands on the identical float twice, so a
+              run of identical readings is itself the anomaly signal.
+              (Triggered by replay-flood.)
+
+For every alert: writes one row to `alerts`, computes a blast radius via
+graph.py, and writes one ledger entry (append-only audit trail) carrying
+that blast radius in its payload. Also bumps/decays each node's
+risk_score and derives HEALTHY/WARN/CRITICAL status from it.
+
+Deliberately never sets status to QUARANTINED — that's a human-confirmed
+action reserved for the dashboard's enforcement layer (Person C), per the
+architecture doc's split between "the graph's model" and "real network
+state." If a node is already QUARANTINED, this engine keeps computing its
+risk_score for display but leaves status alone.
+
+Usage:
+    python detection.py
 """
 
-import time
 import statistics
-import networkx as nx
+import time
 
-from db import get_conn, now
-from ledger import append_event
-from topology import BASELINE_RANGES
+import db
+import graph
+import ledger
 
-TICK_SECONDS = 1.5
-ROLLING_WINDOW = 20          # telemetry samples used for baseline stats
-MIN_SAMPLES = 15             # don't score until the baseline has enough history to be stable
-Z_WARN = 3.2
-Z_CRITICAL = 5.0
+TICK_INTERVAL = 1.0
 
+# --- behavioral z-score tuning ---
+HISTORY_WINDOW = 30       # ticks of history considered per node
+MIN_HISTORY = 10          # need at least this many baseline points before scoring
+WARN_Z = 3.0
+CRIT_Z = 5.0
 
-def build_graph(conn):
-    g = nx.DiGraph()
-    for row in conn.execute("SELECT id FROM nodes"):
-        g.add_node(row["id"])
-    for row in conn.execute("SELECT source, target FROM edges"):
-        g.add_edge(row["source"], row["target"])
-        g.add_edge(row["target"], row["source"])  # comms are effectively bidirectional for blast-radius purposes
-    return g
+# --- network/replay tuning ---
+REPLAY_REPEAT_THRESHOLD = 3   # this many bit-identical consecutive readings = flag
 
+# --- risk score / status tuning ---
+RISK_DECAY = 0.9              # per-tick decay toward 0 when nothing is wrong
+RISK_BUMP = {"INFO": 0.10, "WARN": 0.35, "CRITICAL": 0.75}
+RISK_WARN_THRESHOLD = 0.30
+RISK_CRIT_THRESHOLD = 0.65
 
-def blast_radius(g: nx.DiGraph, node_id: str, hops=2):
-    """Everything reachable within `hops` of a compromised node — this is
-    what would need to be isolated/inspected, and what the dashboard
-    highlights on the graph."""
-    if node_id not in g:
-        return []
-    lengths = nx.single_source_shortest_path_length(g, node_id, cutoff=hops)
-    return [n for n in lengths if n != node_id]
+# --- alert de-dup, so an ongoing attack doesn't flood the alert feed with
+# one row per second — risk_score still keeps climbing every tick either way
+ALERT_DEBOUNCE_SECONDS = 5
 
 
-def score_anomaly(values):
-    """z-score of the latest reading vs the rolling window. Swap this out
-    for an IsolationForest.decision_function call later if time allows —
-    keep the same (mean, std, latest) -> score shape.
+def fetch_node_ids(conn):
+    return [r["id"] for r in conn.execute("SELECT id FROM nodes")]
 
-    Requires MIN_SAMPLES of history before scoring at all — with only a
-    handful of samples the std estimate is too noisy and produces false
-    positives on perfectly healthy random telemetry (this is the exact
-    "baseline drift / false-positive fatigue" problem called out in the
-    architecture doc; the fix there is periodic re-baselining, the fix
-    here for a 24h demo is just: don't trust a tiny window)."""
-    if len(values) < MIN_SAMPLES:
-        return 0.0
-    baseline = values[:-1]
-    latest = values[-1]
+
+def fetch_history(conn, node_id, limit=HISTORY_WINDOW):
+    rows = conn.execute(
+        "SELECT ts, voltage, current, temp FROM telemetry WHERE node_id=? ORDER BY id DESC LIMIT ?",
+        (node_id, limit),
+    ).fetchall()
+    return list(reversed(rows))  # oldest -> newest
+
+
+def channel_zscore(history, channel):
+    """z-score of the latest reading against every earlier reading in the
+    window. Returns None until there's enough history to trust the baseline."""
+    if len(history) < MIN_HISTORY + 1:
+        return None
+    baseline = [r[channel] for r in history[:-1]]
+    latest = history[-1][channel]
     mean = statistics.mean(baseline)
     std = statistics.pstdev(baseline) or 1e-6
     return abs(latest - mean) / std
 
 
-def raise_alert(conn, node_id, severity, category, message):
+def is_replay(history):
+    if len(history) < REPLAY_REPEAT_THRESHOLD:
+        return False
+    tail = history[-REPLAY_REPEAT_THRESHOLD:]
+    v0 = (tail[0]["voltage"], tail[0]["current"], tail[0]["temp"])
+    return all((r["voltage"], r["current"], r["temp"]) == v0 for r in tail)
+
+
+def recent_duplicate(conn, node_id, category, window_seconds=ALERT_DEBOUNCE_SECONDS):
+    row = conn.execute(
+        "SELECT id FROM alerts WHERE node_id=? AND category=? AND ts > ? ORDER BY id DESC LIMIT 1",
+        (node_id, category, db.now() - window_seconds),
+    ).fetchone()
+    return row is not None
+
+
+def raise_alert(conn, node_id, severity, category, message, extra=None, debounce=True):
+    """Writes the alert row + matching ledger entry as one unit. Returns
+    False (no-op) if an alert of the same node+category fired within the
+    debounce window — the situation is still reflected in risk_score even
+    when the alert row itself is suppressed."""
+    if debounce and recent_duplicate(conn, node_id, category):
+        return False
     conn.execute(
-        "INSERT INTO alerts (node_id, ts, severity, category, message) VALUES (?,?,?,?,?)",
-        (node_id, now(), severity, category, message),
+        "INSERT INTO alerts (node_id, ts, severity, category, message, resolved) "
+        "VALUES (?, ?, ?, ?, ?, 0)",
+        (node_id, db.now(), severity, category, message),
     )
-    status = "CRITICAL" if severity == "CRITICAL" else "WARN"
-    conn.execute("UPDATE nodes SET status=? WHERE id=? AND status != 'QUARANTINED'", (status, node_id))
-    conn.commit()
-    append_event("ALERT", {"node_id": node_id, "severity": severity, "category": category, "message": message})
+    payload = {"node_id": node_id, "severity": severity, "category": category, "message": message}
+    if extra:
+        payload.update(extra)
+    ledger.append_entry("ALERT", payload, conn=conn)
+    return True
 
 
-def check_integrity(conn):
-    rows = conn.execute("SELECT id, golden_hash, current_hash, status FROM nodes").fetchall()
-    for r in rows:
-        # skip nodes already flagged/quarantined — don't re-alert every tick for an ongoing issue
-        if r["status"] in ("CRITICAL", "QUARANTINED"):
-            continue
-        if r["current_hash"] != r["golden_hash"]:
-            g = build_graph(conn)
-            radius = blast_radius(g, r["id"])
-            msg = (f"Firmware/identity hash mismatch on {r['id']}. "
-                   f"Blast radius ({len(radius)} nodes): {', '.join(radius) if radius else 'none'}")
-            raise_alert(conn, r["id"], "CRITICAL", "INTEGRITY", msg)
+def apply_risk(conn, node_id, severity):
+    """Bump risk_score toward 1.0 on an active anomaly and derive status
+    from the new score. Never overrides a human-confirmed QUARANTINED."""
+    row = conn.execute("SELECT risk_score, status FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return
+    new_score = min(1.0, row["risk_score"] * RISK_DECAY + RISK_BUMP.get(severity, 0.0))
+    _write_risk(conn, node_id, new_score, row["status"])
 
 
-def check_behavioral(conn):
-    node_rows = conn.execute("SELECT id, status FROM nodes").fetchall()
-    for nr in node_rows:
-        node_id, current_status = nr["id"], nr["status"]
-        if current_status in ("CRITICAL", "QUARANTINED"):
-            continue
-        rows = conn.execute(
-            "SELECT voltage, current, temp FROM telemetry WHERE node_id=? ORDER BY id DESC LIMIT ?",
-            (node_id, ROLLING_WINDOW),
-        ).fetchall()
-        if len(rows) < MIN_SAMPLES:
-            continue
-        rows = list(reversed(rows))  # oldest -> newest
-        for field in ("voltage", "current", "temp"):
-            values = [r[field] for r in rows]
-            z = score_anomaly(values)
-            if z >= Z_CRITICAL:
-                g = build_graph(conn)
-                radius = blast_radius(g, node_id)
-                msg = (f"{field} deviates {z:.1f}\u03c3 from baseline on {node_id}. "
-                       f"Blast radius ({len(radius)} nodes): {', '.join(radius) if radius else 'none'}")
-                raise_alert(conn, node_id, "CRITICAL", "BEHAVIORAL", msg)
-            elif z >= Z_WARN:
-                raise_alert(conn, node_id, "WARN", "BEHAVIORAL", f"{field} drifting ({z:.1f}\u03c3) on {node_id}")
+def decay_risk(conn, node_id):
+    """No anomaly this tick — risk_score relaxes back toward HEALTHY."""
+    row = conn.execute("SELECT risk_score, status FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not row:
+        return
+    new_score = row["risk_score"] * RISK_DECAY
+    _write_risk(conn, node_id, new_score, row["status"])
+
+
+def _write_risk(conn, node_id, new_score, current_status):
+    if current_status == "QUARANTINED":
+        new_status = "QUARANTINED"
+    elif new_score >= RISK_CRIT_THRESHOLD:
+        new_status = "CRITICAL"
+    elif new_score >= RISK_WARN_THRESHOLD:
+        new_status = "WARN"
+    else:
+        new_status = "HEALTHY"
+    conn.execute("UPDATE nodes SET risk_score=?, status=? WHERE id=?", (new_score, new_status, node_id))
+
+
+def check_node(conn, G, node_id):
+    node = conn.execute("SELECT golden_hash, current_hash, status FROM nodes WHERE id=?", (node_id,)).fetchone()
+    if not node:
+        return
+    flagged = False
+
+    # --- INTEGRITY (always wins — an unambiguous hash mismatch) ---
+    if node["golden_hash"] and node["current_hash"] and node["golden_hash"] != node["current_hash"]:
+        radius = graph.blast_radius(G, node_id)
+        raise_alert(
+            conn, node_id, "CRITICAL", "INTEGRITY",
+            f"{node_id}: identity hash mismatch — firmware or hardware identity "
+            f"changed since golden baseline.",
+            extra={"blast_radius": radius},
+        )
+        apply_risk(conn, node_id, "CRITICAL")
+        flagged = True
+
+    history = fetch_history(conn, node_id)
+
+    # --- NETWORK (replay/jamming) ---
+    if not flagged and is_replay(history):
+        radius = graph.blast_radius(G, node_id)
+        raise_alert(
+            conn, node_id, "WARN", "NETWORK",
+            f"{node_id}: identical telemetry across {REPLAY_REPEAT_THRESHOLD} consecutive "
+            f"ticks — possible replay/jamming.",
+            extra={"blast_radius": radius},
+        )
+        apply_risk(conn, node_id, "WARN")
+        flagged = True
+
+    # --- BEHAVIORAL (per-node z-score) ---
+    if not flagged:
+        worst_z, worst_channel = 0.0, None
+        for channel in ("voltage", "current", "temp"):
+            z = channel_zscore(history, channel)
+            if z is not None and z > worst_z:
+                worst_z, worst_channel = z, channel
+
+        if worst_z >= CRIT_Z:
+            radius = graph.blast_radius(G, node_id)
+            raise_alert(
+                conn, node_id, "CRITICAL", "BEHAVIORAL",
+                f"{node_id}: {worst_channel} is {worst_z:.1f} std devs from its own baseline.",
+                extra={"blast_radius": radius, "z_score": worst_z, "channel": worst_channel},
+            )
+            apply_risk(conn, node_id, "CRITICAL")
+            flagged = True
+        elif worst_z >= WARN_Z:
+            raise_alert(
+                conn, node_id, "WARN", "BEHAVIORAL",
+                f"{node_id}: {worst_channel} is {worst_z:.1f} std devs from its own baseline.",
+                extra={"z_score": worst_z, "channel": worst_channel},
+            )
+            apply_risk(conn, node_id, "WARN")
+            flagged = True
+
+    if not flagged:
+        decay_risk(conn, node_id)
 
 
 def main():
-    print("Detection engine running. Ctrl+C to stop.")
+    print(f"[detection] brain online, polling every {TICK_INTERVAL}s. Ctrl+C to stop.")
     try:
         while True:
-            conn = get_conn()
-            check_integrity(conn)
-            check_behavioral(conn)
+            conn = db.get_conn()
+            G = graph.build_graph()
+            for node_id in fetch_node_ids(conn):
+                check_node(conn, G, node_id)
+            conn.commit()
             conn.close()
-            time.sleep(TICK_SECONDS)
+            time.sleep(TICK_INTERVAL)
     except KeyboardInterrupt:
-        pass
+        print("\n[detection] stopping.")
 
 
 if __name__ == "__main__":

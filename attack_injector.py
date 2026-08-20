@@ -1,74 +1,125 @@
 """
-attack_injector.py — the button you press live on stage.
+attack_injector.py — Person A: the CLI trigger fired live on stage.
+
+Three attack types, matching the three detection layers the pitch talks about:
+
+  firmware-tamper  <node_id>   supply-chain trojan swap -> overwrites the node's
+                                 "flash" file, so current_hash diverges from
+                                 golden_hash on the simulator's next tick
+                                 (INTEGRITY alert, detection.py)
+
+  sensor-spike     <node_id>   physical anomaly -> simulator pushes that node's
+                                 voltage/current/temp outside baseline
+                                 (BEHAVIORAL alert, z-score, detection.py)
+
+  replay-flood     <node_id>   network anomaly -> simulator freezes and re-emits
+                                 one reading at high frequency instead of fresh
+                                 noisy samples
+                                 (NETWORK alert, detection.py)
+
+  reset            <node_id>   clear the active attack and restore clean
+                                 firmware (does not touch QUARANTINED status —
+                                 that's the enforcement layer's call)
+
+Writes to the shared `attacks` table only — ied_simulator.py polls that table
+every tick per-node, so this script never talks to the simulator directly and
+can be run from a separate terminal (or hidden dashboard button) at any time.
 
 Usage:
-    python attack_injector.py --list
-    python attack_injector.py --node RELAY-02 --attack firmware_tamper
-    python attack_injector.py --node METER-03 --attack sensor_spike
-    python attack_injector.py --node BCU-01   --attack replay_flood
-    python attack_injector.py --clear RELAY-02      # heal it back for a re-run
-
-This is deliberately a dumb CLI, not part of the dashboard — during a live
-demo you want a fast, reliable, muscle-memory command in a terminal, not a
-dropdown you might fumble on stage. Once comfortable, you can wire a hidden
-Streamlit control to call inject() directly (see dashboard.py TODO).
+    python attack_injector.py list
+    python attack_injector.py firmware-tamper RELAY-02
+    python attack_injector.py sensor-spike METER-03
+    python attack_injector.py replay-flood BCU-01
+    python attack_injector.py reset RELAY-02
 """
 
 import argparse
-from db import get_conn, now
-from ledger import append_event
+import time
 
-ATTACK_TYPES = ["firmware_tamper", "sensor_spike", "replay_flood"]
+import db
+import identity
+import topology
+
+NODE_IDS = [n[0] for n in topology.NODES]
 
 
-def inject(node_id: str, attack_type: str):
-    if attack_type not in ATTACK_TYPES:
-        raise ValueError(f"attack_type must be one of {ATTACK_TYPES}")
-    conn = get_conn()
-    exists = conn.execute("SELECT 1 FROM nodes WHERE id=?", (node_id,)).fetchone()
-    if not exists:
-        conn.close()
-        raise ValueError(f"No such node: {node_id}")
+def log_attack(node_id, attack_type):
+    conn = db.get_conn()
+    conn.execute("UPDATE attacks SET active = 0 WHERE node_id = ? AND active = 1", (node_id,))
     conn.execute(
-        "INSERT INTO attacks (ts, node_id, attack_type, active) VALUES (?,?,?,1)",
-        (now(), node_id, attack_type),
+        "INSERT INTO attacks (ts, node_id, attack_type, active) VALUES (?, ?, ?, 1)",
+        (db.now(), node_id, attack_type),
     )
     conn.commit()
     conn.close()
-    append_event("ATTACK_INJECTED", {"node_id": node_id, "attack_type": attack_type})
-    print(f"[INJECTED] {attack_type} -> {node_id}")
 
 
-def clear(node_id: str):
-    conn = get_conn()
-    conn.execute("UPDATE attacks SET active=0 WHERE node_id=?", (node_id,))
+def clear_attack(node_id):
+    conn = db.get_conn()
+    conn.execute("UPDATE attacks SET active = 0 WHERE node_id = ? AND active = 1", (node_id,))
     conn.commit()
     conn.close()
-    append_event("ATTACK_CLEARED", {"node_id": node_id})
-    print(f"[CLEARED] attacks on {node_id}")
+
+
+def firmware_tamper(node_id):
+    tampered = identity.generate_firmware(node_id, seed=f"TROJAN-{time.time()}")
+    identity.write_firmware(node_id, tampered)
+    log_attack(node_id, "firmware_tamper")
+    print(f"[attack] firmware-tamper injected on {node_id} — flash overwritten, "
+          f"hash mismatch will surface on the next simulator tick (~1s).")
+
+
+def sensor_spike(node_id):
+    log_attack(node_id, "sensor_spike")
+    print(f"[attack] sensor-spike active on {node_id} — telemetry will spike out of baseline.")
+
+
+def replay_flood(node_id):
+    log_attack(node_id, "replay_flood")
+    print(f"[attack] replay-flood active on {node_id} — telemetry will freeze/replay at burst rate.")
+
+
+def reset_node(node_id):
+    clean = identity.generate_firmware(node_id)  # same deterministic seed as boot -> restores golden image
+    identity.write_firmware(node_id, clean)
+    clear_attack(node_id)
+    print(f"[attack] {node_id} restored: clean firmware rewritten, active attack cleared.")
 
 
 def list_nodes():
-    conn = get_conn()
-    rows = conn.execute("SELECT id, type, status FROM nodes ORDER BY id").fetchall()
-    conn.close()
-    for r in rows:
-        print(f"  {r['id']:<12} {r['type']:<8} status={r['status']}")
+    print("Available nodes:")
+    for n in NODE_IDS:
+        print(f"  {n}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="GridSentinel attack injector")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p1 = sub.add_parser("firmware-tamper", help="trojan swap -> identity hash mismatch")
+    p1.add_argument("node_id", choices=NODE_IDS)
+
+    p2 = sub.add_parser("sensor-spike", help="physical anomaly -> z-score behavioral alert")
+    p2.add_argument("node_id", choices=NODE_IDS)
+
+    p3 = sub.add_parser("replay-flood", help="network anomaly -> frozen/duplicate telemetry")
+    p3.add_argument("node_id", choices=NODE_IDS)
+
+    p4 = sub.add_parser("reset", help="clear an attack and restore clean firmware on a node")
+    p4.add_argument("node_id", choices=NODE_IDS)
+
+    sub.add_parser("list", help="list available node ids")
+
+    args = parser.parse_args()
+
+    {
+        "firmware-tamper": lambda: firmware_tamper(args.node_id),
+        "sensor-spike": lambda: sensor_spike(args.node_id),
+        "replay-flood": lambda: replay_flood(args.node_id),
+        "reset": lambda: reset_node(args.node_id),
+        "list": list_nodes,
+    }[args.command]()
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--node")
-    p.add_argument("--attack", choices=ATTACK_TYPES)
-    p.add_argument("--clear")
-    p.add_argument("--list", action="store_true")
-    args = p.parse_args()
-
-    if args.list:
-        list_nodes()
-    elif args.clear:
-        clear(args.clear)
-    elif args.node and args.attack:
-        inject(args.node, args.attack)
-    else:
-        p.print_help()
+    main()
