@@ -25,13 +25,13 @@
     0.1,
     500
   );
-  camera.position.set(12, 13, 17);
+  camera.position.set(11.5, 17.5, 15.5);
 
   // ---------------------------------------------------------------
   // Controls
   // ---------------------------------------------------------------
   var controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0.6, 0);
+  controls.target.set(0, 0.45, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 8;
@@ -474,6 +474,26 @@
     crystal.position.set(0.9, 0.75, 0.5);
     g.add(crystal);
 
+    // Mounting holes
+    var mountingPositions = [
+      [-2.0, -0.65],
+      [-2.0,  0.65],
+      [ 1.8, -0.65],
+      [ 1.8,  0.65]
+    ];
+
+    mountingPositions.forEach(function(pos) {
+      var hole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.11, 0.11, 0.08, 16),
+        mat.hole
+      );
+
+      hole.rotation.x = Math.PI / 2;
+      hole.position.set(pos[0], 0.69, pos[1]);
+
+      g.add(hole);
+    });
+
     var usbConn = box(0.7, 0.35, 0.55, mat.usb);
     usbConn.position.set(-2.55, 0.72, 0);
     g.add(usbConn);
@@ -523,9 +543,44 @@
     body.position.y = 1.1;
     g.add(body);
 
-    var grille = box(0.85, 1.0, 0.06, mat.pcbDark);
-    grille.position.set(0, 1.15, 0.29);
+    var grilleMaterial =
+    new THREE.MeshStandardMaterial({
+      color: 0x1c2530,
+      roughness: 0.8
+    });
+
+    var grille = box(
+      0.78,
+      0.82,
+      0.07,
+      grilleMaterial
+    );
+
+    grille.position.set(
+      0,
+      1.18,
+      0.30
+    );
+
     g.add(grille);
+
+    for (var row = 0; row < 5; row++) {
+
+      var grilleLine = box(
+        0.62,
+        0.035,
+        0.02,
+        mat.sensorBlue
+      );
+
+      grilleLine.position.set(
+        0,
+        0.88 + row * 0.14,
+        0.35
+      );
+
+      g.add(grilleLine);
+    }
 
     for (var i = 0; i < 4; i++) {
       var lead = box(0.05, 0.55, 0.05, mat.wireLead);
