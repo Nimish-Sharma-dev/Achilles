@@ -31,6 +31,318 @@
   // Controls
   // ---------------------------------------------------------------
   var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  // ---------------------------------------------------------------
+  // Tinkercad-style navigation cube
+  // ---------------------------------------------------------------
+
+  var navCubeScene = new THREE.Scene();
+
+  var navCubeCamera = new THREE.OrthographicCamera(
+    -2.4, 2.4, 2.4, -2.4, 0.1, 100
+  );
+
+  navCubeCamera.position.set(0, 0, 6);
+  navCubeCamera.lookAt(0, 0, 0);
+
+  var navCubeRenderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: true
+  });
+
+  navCubeRenderer.setPixelRatio(
+    Math.min(window.devicePixelRatio, 2)
+  );
+
+  navCubeRenderer.setSize(170, 170);
+
+  navCubeRenderer.domElement.style.position = "absolute";
+  navCubeRenderer.domElement.style.top = "16px";
+  navCubeRenderer.domElement.style.right = "16px";
+  navCubeRenderer.domElement.style.width = "170px";
+  navCubeRenderer.domElement.style.height = "170px";
+  navCubeRenderer.domElement.style.zIndex = "20";
+  navCubeRenderer.domElement.style.cursor = "pointer";
+
+  container.style.position = "relative";
+  container.appendChild(navCubeRenderer.domElement);
+
+
+  // ---------------------------------------------------------------
+  // Cube
+  // ---------------------------------------------------------------
+
+  var navCubeGeometry =
+    new THREE.BoxGeometry(2.0, 2.0, 2.0);
+
+  var navCubeMaterials = [
+    new THREE.MeshStandardMaterial({ color: 0x557fb5 }),
+    new THREE.MeshStandardMaterial({ color: 0x557fb5 }),
+    new THREE.MeshStandardMaterial({ color: 0x6b92c2 }),
+    new THREE.MeshStandardMaterial({ color: 0x6b92c2 }),
+    new THREE.MeshStandardMaterial({ color: 0x456d9f }),
+    new THREE.MeshStandardMaterial({ color: 0x456d9f })
+  ];
+
+  var navCube = new THREE.Mesh(
+    navCubeGeometry,
+    navCubeMaterials
+  );
+
+  navCubeScene.add(navCube);
+
+
+  // ---------------------------------------------------------------
+  // Cube edges
+  // ---------------------------------------------------------------
+
+  var navCubeEdges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(navCubeGeometry),
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.9
+    })
+  );
+
+  navCube.add(navCubeEdges);
+
+
+  // ---------------------------------------------------------------
+  // Face labels — attached to the cube
+  // ---------------------------------------------------------------
+
+  function makeCubeLabel(text) {
+
+    var canvas = document.createElement("canvas");
+
+    canvas.width = 256;
+    canvas.height = 128;
+
+    var ctx = canvas.getContext("2d");
+
+    ctx.clearRect(0, 0, 256, 128);
+
+    ctx.font = "600 34px Arial";
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.fillText(text, 128, 64);
+
+    var texture = new THREE.CanvasTexture(canvas);
+
+    var material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false
+    });
+
+    var plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.45, 0.72),
+      material
+    );
+
+    return plane;
+  }
+
+
+  // TOP
+  var topLabel = makeCubeLabel("TOP");
+  topLabel.position.set(0, 1.01, 0);
+  topLabel.rotation.x = -Math.PI / 2;
+  navCube.add(topLabel);
+
+
+  // FRONT
+  var frontLabel = makeCubeLabel("FRONT");
+  frontLabel.position.set(0, 0, 1.01);
+  navCube.add(frontLabel);
+
+
+  // RIGHT
+  var rightLabel = makeCubeLabel("RIGHT");
+  rightLabel.position.set(1.01, 0, 0);
+  rightLabel.rotation.y = Math.PI / 2;
+  navCube.add(rightLabel);
+
+
+  // LEFT
+  var leftLabel = makeCubeLabel("LEFT");
+  leftLabel.position.set(-1.01, 0, 0);
+  leftLabel.rotation.y = -Math.PI / 2;
+  navCube.add(leftLabel);
+
+
+  // BACK
+  var backLabel = makeCubeLabel("BACK");
+  backLabel.position.set(0, 0, -1.01);
+  backLabel.rotation.y = Math.PI;
+  navCube.add(backLabel);
+
+
+  // BOTTOM
+  var bottomLabel = makeCubeLabel("BOTTOM");
+  bottomLabel.position.set(0, -1.01, 0);
+  bottomLabel.rotation.x = Math.PI / 2;
+  navCube.add(bottomLabel);
+
+
+  // ---------------------------------------------------------------
+  // Lighting
+  // ---------------------------------------------------------------
+
+  navCubeScene.add(
+    new THREE.AmbientLight(0xffffff, 2.0)
+  );
+
+  var navLight =
+    new THREE.DirectionalLight(0xffffff, 2.5);
+
+  navLight.position.set(3, 5, 6);
+
+  navCubeScene.add(navLight);
+
+
+  // ---------------------------------------------------------------
+  // Cube interaction
+  // ---------------------------------------------------------------
+
+  var navRaycaster = new THREE.Raycaster();
+
+  var navMouse = new THREE.Vector2();
+
+  navCubeRenderer.domElement.addEventListener(
+    "click",
+    function(event) {
+
+      var rect =
+        navCubeRenderer.domElement.getBoundingClientRect();
+
+      navMouse.x =
+        ((event.clientX - rect.left) / rect.width) * 2 - 1;
+
+      navMouse.y =
+        -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      navRaycaster.setFromCamera(
+        navMouse,
+        navCubeCamera
+      );
+
+      var hits =
+        navRaycaster.intersectObject(navCube);
+
+      if (!hits.length) {
+        return;
+      }
+
+      // Determine the clicked point on the cube.
+      var localPoint =
+        hits[0].point.clone();
+
+      // Convert the point into cube-local coordinates.
+      localPoint.applyQuaternion(
+        navCube.quaternion.clone().invert()
+      );
+
+      // Convert the clicked point into a direction.
+      // This is what enables face + edge + corner views.
+      var direction =
+        localPoint.normalize();
+
+      // Convert back to world space.
+      var worldDirection =
+        direction.clone().applyQuaternion(
+          navCube.quaternion
+        );
+
+      snapCameraToDirection(worldDirection);
+    }
+  );
+
+
+  // ---------------------------------------------------------------
+  // Camera snapping
+  // ---------------------------------------------------------------
+
+  function snapCameraToDirection(direction) {
+
+    var distance = 22;
+
+    var target =
+      controls.target.clone();
+
+    // Quantize the direction slightly so edge/corner clicks
+    // produce stable Tinkercad-style orthographic directions.
+    var x = Math.abs(direction.x) > 0.28
+      ? Math.sign(direction.x)
+      : 0;
+
+    var y = Math.abs(direction.y) > 0.28
+      ? Math.sign(direction.y)
+      : 0;
+
+    var z = Math.abs(direction.z) > 0.28
+      ? Math.sign(direction.z)
+      : 0;
+
+    // Safety fallback.
+    if (x === 0 && y === 0 && z === 0) {
+      y = 1;
+    }
+
+  var snappedDirection =
+    new THREE.Vector3(x, y, z).normalize();
+
+  var destination =
+    target.clone().add(
+      snappedDirection.multiplyScalar(distance)
+    );
+    var start =
+      camera.position.clone();
+
+    var startTime =
+      performance.now();
+
+    var duration = 400;
+
+    function animateSnap(now) {
+
+      var t =
+        Math.min(
+          (now - startTime) / duration,
+          1
+        );
+
+      var eased =
+        t * (2 - t);
+
+      camera.position.lerpVectors(
+        start,
+        destination,
+        eased
+      );
+
+      camera.lookAt(target);
+
+      if (t < 1) {
+
+        requestAnimationFrame(
+          animateSnap
+        );
+
+      } else {
+
+        controls.target.copy(target);
+        controls.update();
+
+      }
+    }
+
+    requestAnimationFrame(
+      animateSnap
+    );
+  }
   controls.target.set(0, 0.45, 0);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
@@ -544,10 +856,10 @@
     g.add(body);
 
     var grilleMaterial =
-    new THREE.MeshStandardMaterial({
-      color: 0x1c2530,
-      roughness: 0.8
-    });
+      new THREE.MeshStandardMaterial({
+        color: 0x1c2530,
+        roughness: 0.8
+      });
 
     var grille = box(
       0.78,
@@ -649,7 +961,76 @@
     addPinRow(g, 4, 0.24, -0.3, 0.58, 0.62);
     return g;
   }
+  function buildResistor() {
+    var g = new THREE.Group();
 
+    var body = box(
+      0.42,
+      0.12,
+      0.12,
+      new THREE.MeshStandardMaterial({
+        color: 0xd7c39b,
+        roughness: 0.72
+      })
+    );
+
+    body.position.y = 0.60;
+    g.add(body);
+
+    for (var b = 0; b < 3; b++) {
+      var band = box(
+        0.035,
+        0.125,
+        0.125,
+        new THREE.MeshStandardMaterial({
+          color: 0x6b4b3e,
+          roughness: 0.7
+        })
+      );
+
+      band.position.set(-0.10 + b * 0.10, 0.60, 0);
+      g.add(band);
+    }
+
+    var lead1 = box(0.20, 0.025, 0.025, mat.wireLead);
+    lead1.position.set(-0.31, 0.60, 0);
+    g.add(lead1);
+
+    var lead2 = box(0.20, 0.025, 0.025, mat.wireLead);
+    lead2.position.set(0.31, 0.60, 0);
+    g.add(lead2);
+
+    return g;
+  }
+
+  function jumperWire(points, color, radius) {
+    var curve = new THREE.CatmullRomCurve3(
+      points.map(function(p) {
+        return new THREE.Vector3(p[0], p[1], p[2]);
+      })
+    );
+
+    var geometry = new THREE.TubeGeometry(
+      curve,
+      Math.max(12, points.length * 8),
+      radius || 0.035,
+      8,
+      false
+    );
+
+    var material = new THREE.MeshStandardMaterial({
+      color: color,
+      roughness: 0.55
+    });
+
+    var mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+
+    scene.add(mesh);
+
+    return mesh;
+  }
   // ---------------------------------------------------------------
   // Component: status LED (with leg pins into the breadboard)
   // ---------------------------------------------------------------
@@ -785,22 +1166,128 @@
     );
 
     scene.add(ledGreen);
+    // LED current-limiting resistors
+    var resistorRed = buildResistor();
+    resistorRed.position.set(-0.55, 0, -2.15);
+    scene.add(resistorRed);
+
+    var resistorYellow = buildResistor();
+    resistorYellow.position.set(0, 0, -2.15);
+    scene.add(resistorYellow);
+
+    var resistorGreen = buildResistor();
+    resistorGreen.position.set(0.55, 0, -2.15);
+    scene.add(resistorGreen);
+
+    // Physical wiring
+    // Red    = VCC
+    // Black  = GND
+    // Yellow = I2C / sensor
+    // Blue   = SPI
+    // Green  = UART / RS-485
+
+    jumperWire([
+      [-6.1, 0.68, 1.86],
+      [-6.0, 0.95, 2.35],
+      [3.0, 0.95, 2.35],
+      [3.2, 0.68, 1.55]
+    ], 0xd23c3c, 0.045);
+
+    jumperWire([
+      [-6.0, 0.68, 0.25],
+      [-6.2, 0.88, -3.75],
+      [3.2, 0.88, -3.75],
+      [3.2, 0.68, -0.95]
+    ], 0x222222, 0.045);
+
+    jumperWire([
+      [-2.25, 0.78, 1.55],
+      [-1.55, 1.05, 1.95],
+      [-0.75, 0.78, 1.95]
+    ], 0xffd23b, 0.038);
+
+    jumperWire([
+      [-2.35, 0.78, 0.95],
+      [-1.4, 1.15, 0.55],
+      [2.25, 1.15, 0.55],
+      [3.3, 0.78, 1.25]
+    ], 0xffd23b, 0.038);
+
+    jumperWire([
+      [-3.55, 0.78, 0.15],
+      [-3.85, 1.05, -0.55],
+      [-3.35, 0.78, -1.10]
+    ], 0x2f6fd2, 0.038);
+
+    jumperWire([
+      [-3.25, 0.78, 0.15],
+      [-2.95, 1.00, -0.45],
+      [-2.85, 0.78, -1.10]
+    ], 0x2f6fd2, 0.034);
+
+    jumperWire([
+      [-2.35, 0.78, 0.55],
+      [-1.55, 1.10, -0.05],
+      [2.65, 1.10, -0.05],
+      [3.15, 0.78, -0.20]
+    ], 0xffd23b, 0.038);
+
+    jumperWire([
+      [-2.15, 0.78, 0.35],
+      [-1.35, 0.95, -0.35],
+      [2.55, 0.95, -0.45],
+      [3.15, 0.78, -0.45]
+    ], 0xffd23b, 0.034);
+
+    jumperWire([
+      [-2.15, 0.78, -0.05],
+      [-1.25, 1.00, -0.90],
+      [0.65, 1.00, -1.40],
+      [0.80, 0.78, -1.45]
+    ], 0x22aa55, 0.040);
+
+    jumperWire([
+      [-1.95, 0.78, -0.15],
+      [-1.10, 0.90, -1.15],
+      [0.95, 0.90, -1.55],
+      [1.10, 0.78, -1.55]
+    ], 0x22aa55, 0.034);
   // ---------------------------------------------------------------
   // Resize + render loop
   // ---------------------------------------------------------------
   function onResize() {
+
     var w = container.clientWidth;
     var h = container.clientHeight;
+
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
+
     renderer.setSize(w, h);
-  }
+
+    navCubeRenderer.setSize(
+      170,
+      170
+    );
+}
   window.addEventListener("resize", onResize);
 
   function animate() {
     requestAnimationFrame(animate);
+
     controls.update();
+
+    // Keep navigation cube oriented with the main camera.
+    navCube.quaternion.copy(camera.quaternion).invert();
+    navCubeEdges.quaternion.copy(navCube.quaternion);
+
     renderer.render(scene, camera);
+
+    navCubeRenderer.render(
+      navCubeScene,
+      navCubeCamera
+    );
   }
-  animate();
+
+animate();
 })();
