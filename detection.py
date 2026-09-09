@@ -288,25 +288,13 @@ def check_temporal(conn):
         if nr["status"] == "QUARANTINED":
             continue
 
-        rows = conn.execute(
-            """
-            SELECT voltage, current, temp
-            FROM telemetry
-            WHERE node_id=?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (node_id, TEMPORAL_WINDOW),
-        ).fetchall()
+        rows, _, analysis = get_temporal_analysis(conn, node_id)
 
         # Do not trust temporal analysis during startup.
         if len(rows) < TEMPORAL_WARMUP:
             TEMPORAL_STREAKS[node_id] = 0
             continue
 
-        rows = list(reversed(rows))
-
-        analysis = analyze_node(rows)
         if node_id == "RELAY-02":
             print("\n[TEMP DEBUG] RELAY-02")
             print("rows:", len(rows))
@@ -526,25 +514,9 @@ def compute_and_record_risk(conn):
         # TEMPORAL COMPONENT
         # --------------------------------------------------
 
-        rows = conn.execute(
-            """
-            SELECT voltage, current, temp
-            FROM telemetry
-            WHERE node_id=?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (node_id, TEMPORAL_WINDOW),
-        ).fetchall()
-
         temporal_score = 0.0
-
-        if len(rows) >= TEMPORAL_WARMUP:
-
-            rows = list(reversed(rows))
-
-            analysis = analyze_node(rows)
-
+        _, _, analysis = get_temporal_analysis(conn, node_id)
+        if analysis is not None:
             temporal_score = analysis["score"]
 
         # Temporal behaviour contributes at most 55 points.
