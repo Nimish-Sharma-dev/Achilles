@@ -26,6 +26,7 @@ from db import get_conn, now, ensure_schema
 from ledger import append_event
 from topology import BASELINE_RANGES
 from temporal import analyze_node
+from persona import build_persona, score_against_persona, get_or_build_persona
 
 TICK_SECONDS = 1.5
 ROLLING_WINDOW = 20          # telemetry samples used for baseline stats
@@ -38,6 +39,11 @@ TEMPORAL_CRITICAL = 85.0
 TEMPORAL_WARMUP = 30
 TEMPORAL_CONFIRMATIONS = 3
 TEMPORAL_STREAKS = {}  # node_id -> count of consecutive abnormal windows
+PERSONA_BASELINE_WINDOW = 120
+PERSONA_RECENT_WINDOW = 10
+
+PERSONA_WARN = 70.0
+PERSONA_CRITICAL = 88.0
 # ------------------------------------------------------------
 #  NEW: overall threat level (used by dashboard.py)
 # ------------------------------------------------------------
@@ -309,7 +315,105 @@ def check_temporal(conn):
         else:
             # Healthy window breaks the anomaly streak.
             TEMPORAL_STREAKS[node_id] = 0
-        
+def check_persona(conn):
+    """
+    Detect behavior that deviates from an individual device's learned baseline.
+    """
+
+    node_rows = conn.execute(
+        "SELECT id, status FROM nodes"
+    ).fetchall()
+
+    for nr in node_rows:
+
+        node_id = nr["id"]
+
+        # A CRITICAL node must still be evaluated by the persona engine.
+        # Multiple independent detectors should be able to corroborate an attack.
+        if nr["status"] == "QUARANTINED":
+            continue
+
+        rows = conn.execute(
+            """
+            SELECT voltage, current, temp
+            FROM telemetry
+            WHERE node_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (
+                node_id,
+                PERSONA_BASELINE_WINDOW,
+            ),
+        ).fetchall()
+
+        if len(rows) < 45:
+            continue
+
+        rows = list(reversed(rows))
+
+        baseline_rows = rows[:-PERSONA_RECENT_WINDOW]
+        recent_rows = rows[-PERSONA_RECENT_WINDOW:]
+
+        persona = get_or_build_persona(
+            node_id,
+            baseline_rows,
+        )
+
+        if not persona.get("ready"):
+            continue
+
+        result = score_against_persona(
+            persona,
+            recent_rows,
+        )
+
+        score = result["score"]
+        channel = result["dominant_channel"]
+        print(
+            f"[PERSONA] {node_id} | "
+            f"score={score:.1f} | "
+            f"channel={channel} | "
+            f"samples={len(baseline_rows)}"
+        )
+
+        if score >= PERSONA_CRITICAL:
+
+            g = build_graph(conn)
+            radius = blast_radius(g, node_id)
+
+            msg = (
+                f"Persona deviation on {node_id}: "
+                f"{channel} behavior differs from "
+                f"device baseline ({score:.1f}/100). "
+                f"Blast radius ({len(radius)} nodes): "
+                f"{', '.join(radius) if radius else 'none'}"
+            )
+
+            raise_alert(
+                conn,
+                node_id,
+                "CRITICAL",
+                "PERSONA",
+                msg,
+            )
+
+        elif score >= PERSONA_WARN:
+
+            msg = (
+                f"Persona drift on {node_id}: "
+                f"{channel} behavior differs from "
+                f"learned baseline ({score:.1f}/100)"
+            )
+
+            raise_alert(
+                conn,
+                node_id,
+                "WARN",
+                "PERSONA",
+                msg,
+            )
+
 def compute_and_record_risk(conn):
     """
     Continuous explainable 0-100 risk score.
@@ -471,7 +575,7 @@ def main():
             # Retained for comparison, disabled in Achilles V2 because
             # temporal/persona analysis supersedes it.
             # check_behavioral(conn)
-
+            check_persona(conn)
             check_temporal(conn)
             check_zeek(conn)
             compute_and_record_risk(conn)
