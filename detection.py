@@ -41,6 +41,13 @@ TEMPORAL_CONFIRMATIONS = 3
 TEMPORAL_STREAKS = {}  # node_id -> count of consecutive abnormal windows
 PERSONA_BASELINE_WINDOW = 120
 PERSONA_RECENT_WINDOW = 10
+TEMPORAL_SCORE_CACHE = {}
+TEMPORAL_SCORE_TS = {}
+
+PERSONA_SCORE_CACHE = {}
+PERSONA_SCORE_TS = {}
+
+EVIDENCE_HOLD_SECONDS = 30
 
 PERSONA_WARN = 70.0
 PERSONA_CRITICAL = 88.0
@@ -241,7 +248,11 @@ def check_temporal(conn):
 
         analysis = analyze_node(rows)
         score = analysis["score"]
-
+        previous = TEMPORAL_SCORE_CACHE.get(node_id, 0.0)
+        # Preserve the strongest recent temporal evidence.
+        TEMPORAL_SCORE_CACHE[node_id] = max(previous, score)
+        if score >= previous:
+            TEMPORAL_SCORE_TS[node_id] = now()
         channel_scores = {
             field: result["score"]
             for field, result in analysis["channels"].items()
@@ -369,6 +380,11 @@ def check_persona(conn):
         )
 
         score = result["score"]
+        previous = PERSONA_SCORE_CACHE.get(node_id, 0.0)
+        PERSONA_SCORE_CACHE[node_id] = max(previous, score)
+        if score >= previous:
+            PERSONA_SCORE_TS[node_id] = now()
+    
         channel = result["dominant_channel"]
         print(
             f"[PERSONA] {node_id} | "
@@ -563,6 +579,331 @@ def compute_and_record_risk(conn):
 
     conn.commit()
 
+def topology_risk(g, node_id):
+    """
+    Estimate the operational importance of a node from its connectivity.
+
+    Higher connectivity means compromise potentially affects more assets.
+    """
+
+    if node_id not in g:
+        return 0.0
+
+    radius = blast_radius(
+        g,
+        node_id,
+        hops=2,
+    )
+
+    total_nodes = max(
+        len(g.nodes) - 1,
+        1,
+    )
+
+    exposure = len(radius) / total_nodes
+
+    return round(
+        min(exposure * 100.0, 100.0),
+        2,
+    )
+
+def get_held_score(score_cache, ts_cache, node_id):
+    """
+    Hold strong detector evidence briefly so the fusion layer does not
+    forget an attack as soon as the latest telemetry window normalizes.
+    """
+
+    score = score_cache.get(node_id, 0.0)
+    timestamp = ts_cache.get(node_id)
+
+    if timestamp is None:
+        return 0.0
+
+    age = now() - timestamp
+
+    # Full strength for 30 seconds.
+    if age <= EVIDENCE_HOLD_SECONDS:
+        return score
+
+    # Then decay during the following 30 seconds.
+    decay_window = EVIDENCE_HOLD_SECONDS
+
+    if age <= EVIDENCE_HOLD_SECONDS + decay_window:
+        remaining = (
+            EVIDENCE_HOLD_SECONDS + decay_window - age
+        ) / decay_window
+
+        return round(score * remaining, 2)
+
+    # Evidence has expired.
+    score_cache[node_id] = 0.0
+    ts_cache.pop(node_id, None)
+
+    return 0.0
+
+def compute_fused_risk(conn):
+    """
+    Achilles V2 evidence-fusion model.
+
+    Combines independent cyber-physical evidence into an explainable
+    0-100 node risk score.
+    """
+
+    g = build_graph(conn)
+
+    nodes = conn.execute(
+        """
+        SELECT id, golden_hash, current_hash
+        FROM nodes
+        """
+    ).fetchall()
+
+    for node in nodes:
+
+        node_id = node["id"]
+
+        # --------------------------------------------------
+        # COMPONENT SCORES
+        # --------------------------------------------------
+
+        temporal = get_held_score(
+            TEMPORAL_SCORE_CACHE,
+            TEMPORAL_SCORE_TS,
+            node_id,
+        )
+
+        persona = get_held_score(
+            PERSONA_SCORE_CACHE,
+            PERSONA_SCORE_TS,
+            node_id,
+        )
+        integrity = (
+            100.0
+            if node["golden_hash"] != node["current_hash"]
+            else 0.0
+        )
+
+        recent_network = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM zeek_logs
+            WHERE node_id=?
+              AND anomaly=1
+              AND ts > ?
+            """,
+            (
+                node_id,
+                now() - 30,
+            ),
+        ).fetchone()
+
+        network_count = (
+            recent_network["count"]
+            if recent_network
+            else 0
+        )
+
+        network = min(
+            network_count * 25.0,
+            100.0,
+        )
+
+        topology = topology_risk(
+            g,
+            node_id,
+        )
+
+        # --------------------------------------------------
+        # WEIGHTED EVIDENCE
+        # --------------------------------------------------
+
+        weighted = {
+            "TEMPORAL": temporal * 0.35,
+            "PERSONA": persona * 0.25,
+            "INTEGRITY": integrity * 0.20,
+            "NETWORK": network * 0.15,
+            "TOPOLOGY": topology * 0.05,
+        }
+
+        risk = sum(weighted.values())
+
+        # --------------------------------------------------
+        # CORROBORATION BONUSES
+        # --------------------------------------------------
+
+        strong_signals = sum([
+            temporal >= 70,
+            persona >= 70,
+            integrity >= 100,
+            network >= 50,
+        ])
+
+        if strong_signals >= 2:
+            risk += 10.0
+
+        if strong_signals >= 3:
+            risk += 10.0
+
+        # Integrity is especially strong evidence.
+        if integrity == 100:
+            risk = max(
+                risk,
+                75.0,
+            )
+
+        # Temporal CRITICAL + persona deviation:
+        # strong behavioral corroboration.
+        if temporal >= 85 and persona >= 60:
+            risk = max(
+                risk,
+                85.0,
+            )
+
+        risk = round(
+            min(risk, 100.0),
+            1,
+        )
+
+        # --------------------------------------------------
+        # PRIMARY SIGNAL
+        # --------------------------------------------------
+
+        raw_scores = {
+            "TEMPORAL": temporal,
+            "PERSONA": persona,
+            "INTEGRITY": integrity,
+            "NETWORK": network,
+            "TOPOLOGY": topology,
+        }
+
+        primary = max(
+            raw_scores,
+            key=raw_scores.get,
+        )
+
+        # --------------------------------------------------
+        # CONFIDENCE
+        # --------------------------------------------------
+
+        evidence_count = sum(
+            value >= 50
+            for value in (
+                temporal,
+                persona,
+                integrity,
+                network,
+            )
+        )
+
+        confidence = min(
+            100.0,
+            40.0 + evidence_count * 20.0,
+        )
+
+        if risk < 20:
+            confidence = 80.0
+
+        # --------------------------------------------------
+        # EXPLANATION
+        # --------------------------------------------------
+
+        explanation_parts = []
+
+        if temporal >= 70:
+            explanation_parts.append(
+                "abnormal temporal sequence"
+            )
+
+        if persona >= 60:
+            explanation_parts.append(
+                "deviation from learned device persona"
+            )
+
+        if integrity:
+            explanation_parts.append(
+                "firmware identity mismatch"
+            )
+
+        if network >= 50:
+            explanation_parts.append(
+                "recent network anomaly"
+            )
+
+        if topology >= 40:
+            explanation_parts.append(
+                "high blast-radius exposure"
+            )
+
+        explanation = (
+            "; ".join(explanation_parts)
+            if explanation_parts
+            else "No strong anomalous evidence"
+        )
+
+        # --------------------------------------------------
+        # WRITE RESULT
+        # --------------------------------------------------
+
+        conn.execute(
+            """
+            UPDATE nodes
+            SET risk_score=?
+            WHERE id=?
+            """,
+            (
+                risk,
+                node_id,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO risk_history
+                (node_id, ts, risk_score)
+            VALUES (?, ?, ?)
+            """,
+            (
+                node_id,
+                now(),
+                risk,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO detection_scores (
+                node_id,
+                ts,
+                temporal_score,
+                persona_score,
+                integrity_score,
+                network_score,
+                topology_score,
+                final_risk,
+                confidence,
+                primary_signal,
+                explanation
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                node_id,
+                now(),
+                temporal,
+                persona,
+                integrity,
+                network,
+                topology,
+                risk,
+                confidence,
+                primary,
+                explanation,
+            ),
+        )
+
+    conn.commit()
+
+
 def main():
     ensure_schema()
     print("Detection engine running. Ctrl+C to stop.")
@@ -578,7 +919,7 @@ def main():
             check_persona(conn)
             check_temporal(conn)
             check_zeek(conn)
-            compute_and_record_risk(conn)
+            compute_fused_risk(conn)
             conn.close()
             time.sleep(TICK_SECONDS)
     except KeyboardInterrupt:

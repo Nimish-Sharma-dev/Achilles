@@ -25,6 +25,23 @@ def get_conn():
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS detection_scores (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id         TEXT,
+    ts              REAL,
+
+    temporal_score  REAL DEFAULT 0.0,
+    persona_score   REAL DEFAULT 0.0,
+    integrity_score REAL DEFAULT 0.0,
+    network_score   REAL DEFAULT 0.0,
+    topology_score  REAL DEFAULT 0.0,
+
+    final_risk      REAL DEFAULT 0.0,
+    confidence      REAL DEFAULT 0.0,
+    primary_signal  TEXT,
+    explanation     TEXT
+);
+
 CREATE TABLE IF NOT EXISTS nodes (
     id           TEXT PRIMARY KEY,
     type         TEXT,        -- relay | bcu | meter | rtu
