@@ -295,10 +295,6 @@ def check_temporal(conn):
             TEMPORAL_STREAKS[node_id] = 0
             continue
 
-        if node_id == "RELAY-02":
-            print("\n[TEMP DEBUG] RELAY-02")
-            print("rows:", len(rows))
-            print("analysis:", analysis)
         score = analysis["score"]
         if node_id == "RELAY-02":
             print(
