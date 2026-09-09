@@ -67,7 +67,7 @@ def _normalized(value, scale):
     return value / scale
 
 
-def extract_series_features(values):
+def extract_series_features(values, baseline_values=None):
     """
     Extract temporal characteristics from one telemetry series.
 
@@ -84,7 +84,9 @@ def extract_series_features(values):
     previous = values[-2]
     latest = values[-1]
 
-    baseline = values[:-1]
+    baseline = list(baseline_values) if baseline_values is not None else values[:-1]
+    if len(baseline) < 2:
+        baseline = values[:-1]
 
     mean = _safe_mean(baseline)
     std = _safe_std(baseline) or 1e-6
@@ -106,8 +108,15 @@ def extract_series_features(values):
     typical_change = _safe_mean(recent_changes[:-1]) or 1e-6
     rate_change_score = abs(delta) / typical_change
 
+    baseline_mean = _safe_mean(baseline)
     recent_mean = _safe_mean(values[-5:])
-    older_mean = _safe_mean(values[-10:-5])
+    older_mean = (
+        baseline_mean
+        if baseline_values is not None
+        else _safe_mean(values[-10:-5])
+    )
+
+    level_shift = abs(recent_mean - baseline_mean) / std
 
     persistence = abs(recent_mean - older_mean) / std
 
@@ -136,6 +145,8 @@ def extract_series_features(values):
 
         "persistence": persistence,
 
+        "level_shift": level_shift,
+
         "volatility_ratio": volatility_ratio,
     }
 
@@ -155,6 +166,7 @@ def score_temporal_features(features):
     ewma_dev = features["ewma_deviation"]
     rate = features["rate_change_score"]
     persistence = features["persistence"]
+    level_shift = features.get("level_shift", 0.0)
     volatility = features["volatility_ratio"]
 
     score = 0.0
@@ -171,23 +183,26 @@ def score_temporal_features(features):
     # Persistent movement matters more than a single spike
     score += min(persistence / 4.0, 1.0) * 25.0
 
+    # A sustained state change remains visible against a clean baseline.
+    score += min(level_shift / 4.0, 1.0) * 15.0
+
     # Volatility contributes, but should rarely dominate.
     excess_volatility = max(0.0, volatility - 1.5)
     score += min(excess_volatility / 4.0, 1.0) * 10.0
 
     return round(min(score, 100.0), 2)
-def analyze_series(values):
+def analyze_series(values, baseline_values=None):
     """
     Run the complete temporal analysis pipeline for one telemetry channel.
     """
-    features = extract_series_features(values)
+    features = extract_series_features(values, baseline_values)
 
     return {
         "features": features,
         "score": score_temporal_features(features),
     }
 
-def analyze_node(rows):
+def analyze_node(rows, baseline_rows=None):
     """
     Analyze all telemetry channels for a node.
 
@@ -204,7 +219,10 @@ def analyze_node(rows):
     for field in ("voltage", "current", "temp"):
         values = [float(row[field]) for row in rows]
 
-        result[field] = analyze_series(values)
+        baseline_values = None
+        if baseline_rows is not None:
+            baseline_values = [float(row[field]) for row in baseline_rows]
+        result[field] = analyze_series(values, baseline_values)
 
     ready_scores = [
         result[field]["score"]

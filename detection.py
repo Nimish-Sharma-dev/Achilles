@@ -34,6 +34,7 @@ MIN_SAMPLES = 15             # don't score until the baseline has enough history
 Z_WARN = 4.5
 Z_CRITICAL = 6.5
 TEMPORAL_WINDOW = 45
+TEMPORAL_BASELINE_WINDOW = 120
 TEMPORAL_WARN = 68.0
 TEMPORAL_CRITICAL = 85.0
 TEMPORAL_WARMUP = 30
@@ -51,6 +52,63 @@ EVIDENCE_HOLD_SECONDS = 30
 
 PERSONA_WARN = 70.0
 PERSONA_CRITICAL = 88.0
+
+
+def get_temporal_analysis(conn, node_id):
+    """Analyze recent telemetry against a baseline kept outside the attack."""
+    recent_rows = conn.execute(
+        """
+        SELECT voltage, current, temp
+        FROM telemetry
+        WHERE node_id=?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (node_id, TEMPORAL_WINDOW),
+    ).fetchall()
+
+    if len(recent_rows) < TEMPORAL_WARMUP:
+        return recent_rows, None, None
+
+    recent_rows = list(reversed(recent_rows))
+    attack = conn.execute(
+        """
+        SELECT ts
+        FROM attacks
+        WHERE node_id=? AND ts <= ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (node_id, now()),
+    ).fetchone()
+
+    if attack:
+        baseline_rows = conn.execute(
+            """
+            SELECT voltage, current, temp
+            FROM telemetry
+            WHERE node_id=? AND ts < ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (node_id, attack["ts"], TEMPORAL_BASELINE_WINDOW),
+        ).fetchall()
+    else:
+        historical_rows = conn.execute(
+            """
+            SELECT voltage, current, temp
+            FROM telemetry
+            WHERE node_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (node_id, TEMPORAL_WINDOW + TEMPORAL_BASELINE_WINDOW),
+        ).fetchall()
+        baseline_rows = historical_rows[TEMPORAL_WINDOW:]
+
+    baseline_rows = list(reversed(baseline_rows))
+    analysis = analyze_node(recent_rows, baseline_rows)
+    return recent_rows, baseline_rows, analysis
 # ------------------------------------------------------------
 #  NEW: overall threat level (used by dashboard.py)
 # ------------------------------------------------------------
@@ -225,7 +283,9 @@ def check_temporal(conn):
 
         node_id = nr["id"]
 
-        if nr["status"] in ("CRITICAL", "QUARANTINED"):
+        # CRITICAL nodes must still be analysed.
+        # Independent detectors must be allowed to corroborate one another.
+        if nr["status"] == "QUARANTINED":
             continue
 
         rows = conn.execute(
@@ -247,7 +307,16 @@ def check_temporal(conn):
         rows = list(reversed(rows))
 
         analysis = analyze_node(rows)
+        if node_id == "RELAY-02":
+            print("\n[TEMP DEBUG] RELAY-02")
+            print("rows:", len(rows))
+            print("analysis:", analysis)
         score = analysis["score"]
+        if node_id == "RELAY-02":
+            print(
+                f"[TEMPORAL] {node_id} | "
+                f"score={score:.1f}"
+            )
         previous = TEMPORAL_SCORE_CACHE.get(node_id, 0.0)
         # Preserve the strongest recent temporal evidence.
         TEMPORAL_SCORE_CACHE[node_id] = max(previous, score)
@@ -393,7 +462,7 @@ def check_persona(conn):
             f"samples={len(baseline_rows)}"
         )
 
-        if score >= PERSONA_CRITICAL:
+        """if score >= PERSONA_CRITICAL:
 
             g = build_graph(conn)
             radius = blast_radius(g, node_id)
@@ -428,7 +497,7 @@ def check_persona(conn):
                 "WARN",
                 "PERSONA",
                 msg,
-            )
+            )"""
 
 def compute_and_record_risk(conn):
     """
@@ -916,8 +985,8 @@ def main():
             # Retained for comparison, disabled in Achilles V2 because
             # temporal/persona analysis supersedes it.
             # check_behavioral(conn)
-            check_persona(conn)
             check_temporal(conn)
+            check_persona(conn)
             check_zeek(conn)
             compute_fused_risk(conn)
             conn.close()
