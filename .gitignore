@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+venv/
+
+# SQLite runtime files
+*.db-shm
+*.db-wal
+
+# Achilles runtime database
+gridsentinel.db
+
+# Zeek runtime logs
+zeek/logs/*.log
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Temporary analysis files
+achilles_core.txt

@@ -25,7 +25,6 @@ import networkx as nx
 from db import get_conn
 from ledger import get_ledger, verify_chain, append_event
 from detection import build_graph, blast_radius
-from detection import overall_threat_level
 
 # ----------------------------------------------------------------------------
 # PAGE CONFIG — sidebar expanded by default, header visible for toggle arrow
@@ -266,14 +265,17 @@ with left:
     st.markdown('<div class="eyebrow">GRIDSENTINEL // SUBSTATION-04 LIVE FEED</div>', unsafe_allow_html=True)
     st.markdown('<div class="wordmark">GRIDSENTINEL</div>', unsafe_allow_html=True)
 
-nodes, edges, alerts = load_state()
-level, level_color = overall_threat_level(nodes)
-with right:
-    st.markdown(f'''<div class="panel" style="text-align:center;">
-        <div class="eyebrow">THREAT LEVEL</div>
-        <div class="status-pill" style="background:{level_color}22;color:{level_color};
-             border:1px solid {level_color};margin-top:4px;font-size:1rem;">{level}</div>
-        </div>''', unsafe_allow_html=True)
+left, right = st.columns([3, 1])
+
+with left:
+    st.markdown(
+        '<div class="eyebrow">GRIDSENTINEL // SUBSTATION-04 LIVE FEED</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        '<div class="wordmark">GRIDSENTINEL</div>',
+        unsafe_allow_html=True
+    )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -285,6 +287,28 @@ st.markdown("<br>", unsafe_allow_html=True)
 @st.fragment(run_every=1)
 def live_view():
     nodes, edges, alerts = load_state()
+
+    level, level_color = overall_threat_level(nodes)
+
+    st.markdown(
+        f'''
+        <div style="display:flex;justify-content:flex-end;margin-bottom:20px;">
+            <div class="panel" style="text-align:center;min-width:250px;">
+                <div class="eyebrow">THREAT LEVEL</div>
+                <div class="status-pill"
+                     style="
+                        background:{level_color}22;
+                        color:{level_color};
+                        border:1px solid {level_color};
+                        margin-top:4px;
+                        font-size:1rem;">
+                    {level}
+                </div>
+            </div>
+        </div>
+        ''',
+        unsafe_allow_html=True
+    )
 
     conn = get_conn()
     g = build_graph(conn)

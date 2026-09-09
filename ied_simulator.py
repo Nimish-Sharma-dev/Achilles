@@ -21,7 +21,84 @@ from topology import NODES, EDGES, BASELINE_RANGES
 from zeek_sensor import emit_tick, reset_log_files
 
 TICK_SECONDS = 1.0
+# ------------------------------------------------------------------
+# STATEFUL TELEMETRY MODEL
+# ------------------------------------------------------------------
 
+DEVICE_STATE = {}
+
+
+def midpoint(bounds):
+    return (bounds[0] + bounds[1]) / 2
+
+
+def initialise_device_state(node_id, rng):
+    """Create the initial operating state for an IED."""
+    DEVICE_STATE[node_id] = {
+        "voltage": midpoint(rng["voltage"]),
+        "current": midpoint(rng["current"]),
+        "temp": midpoint(rng["temp"]),
+    }
+
+
+def evolve_value(previous, bounds, noise_fraction=0.025, reversion=0.08):
+    """
+    Generate temporally correlated telemetry.
+
+    The next observation depends on the previous observation rather than
+    being independently sampled from the entire operating range.
+    """
+    low, high = bounds
+    centre = midpoint(bounds)
+    span = high - low
+
+    mean_reversion = reversion * (centre - previous)
+    noise = random.gauss(0, span * noise_fraction)
+
+    value = previous + mean_reversion + noise
+
+    # Allow a little natural operating variation while preventing
+    # unrealistic runaway values during normal operation.
+    margin = span * 0.05
+
+    return max(low - margin, min(high + margin, value))
+
+
+def generate_normal_telemetry(node_id, rng):
+    """Return the next stateful telemetry observation for an IED."""
+
+    if node_id not in DEVICE_STATE:
+        initialise_device_state(node_id, rng)
+
+    state = DEVICE_STATE[node_id]
+
+    voltage = evolve_value(
+        state["voltage"],
+        rng["voltage"],
+        noise_fraction=0.018,
+        reversion=0.10,
+    )
+
+    current = evolve_value(
+        state["current"],
+        rng["current"],
+        noise_fraction=0.035,
+        reversion=0.07,
+    )
+
+    # Temperature reacts more slowly than electrical measurements.
+    temp = evolve_value(
+        state["temp"],
+        rng["temp"],
+        noise_fraction=0.012,
+        reversion=0.025,
+    )
+
+    state["voltage"] = voltage
+    state["current"] = current
+    state["temp"] = temp
+
+    return voltage, current, temp
 
 def compute_identity_hash(node_id, vendor, model, serial, firmware_blob="v1.0.0-stable"):
     """SHA-256 of firmware + hardware identity. NOT physical params — those
@@ -64,9 +141,10 @@ def tick(conn):
         rng = BASELINE_RANGES[node["type"]]
         attack = get_active_attack(conn, node["id"])
 
-        voltage = random.uniform(*rng["voltage"])
-        current = random.uniform(*rng["current"])
-        temp = random.uniform(*rng["temp"])
+        voltage, current, temp = generate_normal_telemetry(
+            node["id"],
+            rng,
+        )
         new_hash = node["golden_hash"]
 
         if attack:

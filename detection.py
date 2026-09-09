@@ -25,14 +25,19 @@ import networkx as nx
 from db import get_conn, now, ensure_schema
 from ledger import append_event
 from topology import BASELINE_RANGES
+from temporal import analyze_node
 
 TICK_SECONDS = 1.5
 ROLLING_WINDOW = 20          # telemetry samples used for baseline stats
 MIN_SAMPLES = 15             # don't score until the baseline has enough history to be stable
-Z_WARN = 3.2
-Z_CRITICAL = 5.0
-
-
+Z_WARN = 4.5
+Z_CRITICAL = 6.5
+TEMPORAL_WINDOW = 45
+TEMPORAL_WARN = 68.0
+TEMPORAL_CRITICAL = 85.0
+TEMPORAL_WARMUP = 30
+TEMPORAL_CONFIRMATIONS = 3
+TEMPORAL_STREAKS = {}  # node_id -> count of consecutive abnormal windows
 # ------------------------------------------------------------
 #  NEW: overall threat level (used by dashboard.py)
 # ------------------------------------------------------------
@@ -191,38 +196,268 @@ def check_behavioral(conn):
             elif z >= Z_WARN:
                 raise_alert(conn, node_id, "WARN", "BEHAVIORAL", f"{field} drifting ({z:.1f}\u03c3) on {node_id}")
 
+def check_temporal(conn):
+    """
+    Sequence-aware detector.
 
-def compute_and_record_risk(conn):
-    """Continuous 0-100 risk score per node, written every tick regardless of
-    whether it crosses an alert threshold — this is what the risk-over-time
-    chart in the dashboard plots. Blends the worst behavioral z-score
-    (0-70 pts) with a flat integrity-mismatch penalty (30 pts), so a hash
-    mismatch alone guarantees CRITICAL-range risk even before any telemetry
-    drifts."""
-    node_rows = conn.execute("SELECT id, golden_hash, current_hash FROM nodes").fetchall()
+    WARN requires repeated abnormal windows.
+    CRITICAL can fire immediately for a very strong anomaly.
+    """
+
+    node_rows = conn.execute(
+        "SELECT id, status FROM nodes"
+    ).fetchall()
+
     for nr in node_rows:
+
         node_id = nr["id"]
+
+        if nr["status"] in ("CRITICAL", "QUARANTINED"):
+            continue
+
         rows = conn.execute(
-            "SELECT voltage, current, temp FROM telemetry WHERE node_id=? ORDER BY id DESC LIMIT ?",
-            (node_id, ROLLING_WINDOW),
+            """
+            SELECT voltage, current, temp
+            FROM telemetry
+            WHERE node_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (node_id, TEMPORAL_WINDOW),
         ).fetchall()
+
+        # Do not trust temporal analysis during startup.
+        if len(rows) < TEMPORAL_WARMUP:
+            TEMPORAL_STREAKS[node_id] = 0
+            continue
+
         rows = list(reversed(rows))
-        z_scores = []
-        if len(rows) >= MIN_SAMPLES:
-            for field in ("voltage", "current", "temp"):
-                values = [r[field] for r in rows]
-                z_scores.append(score_anomaly(values))
-        behavioral_component = min(70.0, (max(z_scores) / Z_CRITICAL) * 70.0) if z_scores else 0.0
-        integrity_component = 30.0 if nr["current_hash"] != nr["golden_hash"] else 0.0
-        risk = round(min(100.0, behavioral_component + integrity_component), 1)
 
-        conn.execute("UPDATE nodes SET risk_score=? WHERE id=?", (risk, node_id))
-        conn.execute(
-            "INSERT INTO risk_history (node_id, ts, risk_score) VALUES (?,?,?)",
-            (node_id, now(), risk),
+        analysis = analyze_node(rows)
+        score = analysis["score"]
+
+        channel_scores = {
+            field: result["score"]
+            for field, result in analysis["channels"].items()
+        }
+
+        dominant_channel = max(
+            channel_scores,
+            key=channel_scores.get,
         )
-    conn.commit()
 
+        dominant_score = channel_scores[dominant_channel]
+
+        # --------------------------------------------------
+        # CRITICAL
+        # Strong anomalies do not require confirmation.
+        # --------------------------------------------------
+        if score >= TEMPORAL_CRITICAL:
+
+            TEMPORAL_STREAKS[node_id] = 0
+
+            g = build_graph(conn)
+            radius = blast_radius(g, node_id)
+
+            msg = (
+                f"Temporal anomaly on {node_id}: "
+                f"{dominant_channel} sequence score "
+                f"{dominant_score:.1f}/100. "
+                f"Blast radius ({len(radius)} nodes): "
+                f"{', '.join(radius) if radius else 'none'}"
+            )
+
+            raise_alert(
+                conn,
+                node_id,
+                "CRITICAL",
+                "TEMPORAL",
+                msg,
+            )
+
+            continue
+
+        # --------------------------------------------------
+        # WARNING
+        # Require persistence to avoid noisy one-window alerts.
+        # --------------------------------------------------
+        if score >= TEMPORAL_WARN:
+
+            TEMPORAL_STREAKS[node_id] = (
+                TEMPORAL_STREAKS.get(node_id, 0) + 1
+            )
+
+            if TEMPORAL_STREAKS[node_id] >= TEMPORAL_CONFIRMATIONS:
+
+                msg = (
+                    f"Persistent temporal drift on {node_id}: "
+                    f"{dominant_channel} sequence score "
+                    f"{dominant_score:.1f}/100 "
+                    f"across {TEMPORAL_CONFIRMATIONS} windows"
+                )
+
+                raise_alert(
+                    conn,
+                    node_id,
+                    "WARN",
+                    "TEMPORAL",
+                    msg,
+                )
+
+                TEMPORAL_STREAKS[node_id] = 0
+
+        else:
+            # Healthy window breaks the anomaly streak.
+            TEMPORAL_STREAKS[node_id] = 0
+        
+def compute_and_record_risk(conn):
+    """
+    Continuous explainable 0-100 risk score.
+
+    Risk currently combines:
+        - temporal telemetry behaviour
+        - firmware integrity
+        - recent network evidence
+
+    Persona deviation will be added in the next phase.
+    """
+
+    node_rows = conn.execute(
+        """
+        SELECT id, golden_hash, current_hash
+        FROM nodes
+        """
+    ).fetchall()
+
+    for nr in node_rows:
+
+        node_id = nr["id"]
+
+        # --------------------------------------------------
+        # TEMPORAL COMPONENT
+        # --------------------------------------------------
+
+        rows = conn.execute(
+            """
+            SELECT voltage, current, temp
+            FROM telemetry
+            WHERE node_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (node_id, TEMPORAL_WINDOW),
+        ).fetchall()
+
+        temporal_score = 0.0
+
+        if len(rows) >= TEMPORAL_WARMUP:
+
+            rows = list(reversed(rows))
+
+            analysis = analyze_node(rows)
+
+            temporal_score = analysis["score"]
+
+        # Temporal behaviour contributes at most 55 points.
+        temporal_component = (
+            temporal_score / 100.0
+        ) * 55.0
+
+
+        # --------------------------------------------------
+        # INTEGRITY COMPONENT
+        # --------------------------------------------------
+
+        integrity_mismatch = (
+            nr["current_hash"] != nr["golden_hash"]
+        )
+
+        integrity_component = (
+            35.0 if integrity_mismatch else 0.0
+        )
+
+
+        # --------------------------------------------------
+        # NETWORK COMPONENT
+        # --------------------------------------------------
+
+        recent_network = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM zeek_logs
+            WHERE node_id=?
+              AND anomaly=1
+              AND ts > ?
+            """,
+            (
+                node_id,
+                now() - 30,
+            ),
+        ).fetchone()
+
+        network_count = (
+            recent_network["count"]
+            if recent_network
+            else 0
+        )
+
+        network_component = min(
+            network_count * 5.0,
+            10.0
+        )
+
+
+        # --------------------------------------------------
+        # FINAL RISK
+        # --------------------------------------------------
+
+        risk = (
+            temporal_component
+            + integrity_component
+            + network_component
+        )
+
+        # Suppress meaningless low-level stochastic noise.
+        if (
+            not integrity_mismatch
+            and network_count == 0
+            and temporal_score < 35
+        ):
+            risk *= 0.35
+
+        risk = round(
+            min(100.0, risk),
+            1,
+        )
+
+
+        conn.execute(
+            """
+            UPDATE nodes
+            SET risk_score=?
+            WHERE id=?
+            """,
+            (
+                risk,
+                node_id,
+            ),
+        )
+
+        conn.execute(
+            """
+            INSERT INTO risk_history
+                (node_id, ts, risk_score)
+            VALUES
+                (?, ?, ?)
+            """,
+            (
+                node_id,
+                now(),
+                risk,
+            ),
+        )
+
+    conn.commit()
 
 def main():
     ensure_schema()
@@ -231,7 +466,13 @@ def main():
         while True:
             conn = get_conn()
             check_integrity(conn)
-            check_behavioral(conn)
+
+            # Legacy single-point z-score detector.
+            # Retained for comparison, disabled in Achilles V2 because
+            # temporal/persona analysis supersedes it.
+            # check_behavioral(conn)
+
+            check_temporal(conn)
             check_zeek(conn)
             compute_and_record_risk(conn)
             conn.close()
